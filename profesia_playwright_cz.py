@@ -3,27 +3,30 @@ import time
 import random
 import re
 import os
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from bs4 import BeautifulSoup
 
 # ────────────────────────────────────────────────
-# CONFIG
+# CONFIG – change values here only
 # ────────────────────────────────────────────────
 
-BASE_URL = "https://www.profesia.cz/prace/"          # main page – all jobs
+BASE_URL = "https://www.profesia.cz/prace/"
+SEARCH_TERM = "python"                           # ← Change this to anything (e.g. "python", "java")
+SORT_BY = "relevance"                                 # can be "validity_from", "salary_desc", etc.
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
 DEBUG_DIR = "debug_pages_profesia_cz"
-OUTPUT_FILE = "profesia_cz_all_jobs.csv"
+OUTPUT_FILE = f"profesia_cz_{SEARCH_TERM.replace(' ', '_')}_jobs.csv"
 
-MAX_PAGES = 5  # start small – increase slowly
+MAX_PAGES = 2  # start small – increase later
 
-# Create debug folder automatically (this fixes your error)
+# Auto-create debug folder
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
 # ────────────────────────────────────────────────
@@ -47,7 +50,7 @@ def load_page(page, url, pg_num):
     except PlaywrightTimeoutError:
         print(" → No jobs after wait – possible block / layout change / empty page")
 
-    page.wait_for_timeout(random.randint(3000, 8000))  # mimic human pause
+    page.wait_for_timeout(random.randint(3000, 8000))  # human-like pause
     html = page.content()
 
     debug_file = os.path.join(DEBUG_DIR, f"debug_page_{pg_num}.html")
@@ -103,7 +106,7 @@ def parse_jobs(html, base_url):
         if loc_title and loc_title != location:
             location = f"{location} ({loc_title})"
 
-        # Salary – flexible for Czech (Kč, EUR, od, do, měsíc, hodiny, etc.)
+        # Salary – flexible for Czech
         salary = "N/A"
         sal_span = li.find("span", class_=re.compile(r"label.*green|label.*salary|label.*money"))
         if sal_span:
@@ -129,14 +132,14 @@ def parse_jobs(html, base_url):
 
 
 # ────────────────────────────────────────────────
-# MAIN – SCRAPE MAIN PAGE + PAGINATION
+# MAIN – SEARCH + PAGINATION WITH CORRECT PARAMS
 # ────────────────────────────────────────────────
 
 def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
     all_jobs = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)  # change to False to watch
+        browser = p.chromium.launch(headless=True)  # set False to watch
         context = browser.new_context(
             user_agent=USER_AGENT,
             viewport={"width": 1280, "height": 1024},
@@ -145,11 +148,41 @@ def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
         )
         page = context.new_page()
 
-        print("Starting scrape of profesia.cz main page (all jobs)...")
+        print("Navigating to profesia.cz...")
+        page.goto(BASE_URL, wait_until="networkidle", timeout=45000)
 
-        current_url = BASE_URL
+        # Perform search using the real parameter
+        try:
+            print(f"Performing search: '{SEARCH_TERM}'")
+            search_input = page.wait_for_selector(
+                "input[placeholder*='Pozice' i], "
+                "input[placeholder*='Hledat' i], "
+                "input[name='q'], input[name='search_anywhere'], "
+                "input[type='search'], "
+                "input[aria-label*='hledat' i]",
+                timeout=30000
+            )
+            search_input.fill(SEARCH_TERM)
+            search_input.press("Enter")
+
+            page.wait_for_load_state("networkidle", timeout=40000)
+            print(" → Search results loaded")
+        except Exception as e:
+            print(f" → Search failed: {e}")
+            # Fallback: manually build search URL if selector misses
+            search_url = f"{BASE_URL}?search_anywhere={quote(SEARCH_TERM)}&sort_by=relevance"
+            print(f" → Falling back to direct URL: {search_url}")
+            page.goto(search_url, wait_until="networkidle", timeout=45000)
+
+        # Scrape pages using correct pagination (?page_num=)
+        current_url = page.url
         for pg in range(1, max_pages + 1):
-            url = current_url if pg == 1 else f"{current_url}?strana={pg}"
+            if pg > 1:
+                separator = "&" if "?" in current_url else "?"
+                url = f"{current_url}{separator}page_num={pg}"
+            else:
+                url = current_url
+
             try:
                 html = load_page(page, url, pg)
                 page_jobs = parse_jobs(html, BASE_URL)
@@ -159,7 +192,7 @@ def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
                 print(f" → FAILED page {pg}: {e}")
                 break
 
-            time.sleep(random.uniform(10, 22))  # polite delay between pages
+            time.sleep(random.uniform(10, 22))  # polite delay
 
         browser.close()
 
@@ -170,15 +203,15 @@ def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
             writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
             writer.writerows(all_jobs)
-        print(f"\nDone! Saved {len(all_jobs)} jobs → {output_file}")
+        print(f"\nDone! Saved {len(all_jobs)} jobs for '{SEARCH_TERM}' → {output_file}")
     else:
-        print("\nNo jobs scraped. Check files in folder: {DEBUG_DIR}")
-        print("Possible causes: Cloudflare/CAPTCHA block, site layout change, or empty results.")
+        print("\nNo jobs scraped. Check debug files in: {DEBUG_DIR}")
+        print("Likely causes: anti-bot block (CAPTCHA/Cloudflare), changed selectors, or no results.")
 
 
 if __name__ == "__main__":
-    # Install once if needed:
+    # Install dependencies once if needed:
     # pip install playwright tenacity beautifulsoup4 lxml
     # playwright install
 
-    main(max_pages=5)  # feel free to increase, but start small
+    main(max_pages=2)
