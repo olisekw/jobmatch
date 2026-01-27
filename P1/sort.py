@@ -8,7 +8,7 @@ OUTPUT_FILE = "sorted_jobs.csv"
 
 # Keywords (case-insensitive)
 
-LOCATION_KEYWORD = "košice"  # will match Košice, kosice, KOŠICE, etc.
+# LOCATION_KEYWORD = "bratislava"  # will match Košice, kosice, KOŠICE, etc.
 
 # Freshness patterns for today / yesterday / last 7 days
 FRESHNESS_PATTERNS = [
@@ -22,10 +22,10 @@ FRESHNESS_PATTERNS = [
 
 
 
-def matches_location(location):
-    if not location:
-        return False
-    return LOCATION_KEYWORD in location.lower()
+# def matches_location(location):
+#     if not location:
+#         return False
+#     return LOCATION_KEYWORD in location.lower()
 
 def matches_recent(freshness):
     if not freshness:
@@ -56,9 +56,9 @@ def filter_kosice_junior_recent():
                 location = row.get("Location", "").strip()
                 freshness = row.get("Freshness", "").strip()
 
-                if  matches_location(location):
-                        writer.writerow(row)
-                        count += 1
+                # if  matches_location(location):
+                writer.writerow(row)
+                count += 1
 
     print(f"Done!")
     print(f"Found and saved {count} jobs matching ALL conditions:")

@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 # ────────────────────────────────────────────────
 
 BASE_URL = "https://www.profesia.sk/praca/"
-SEARCH_TERM = "developer"                                # ← Change this freely (e.g. "programátor", "data analyst", "java")
+SEARCH_TERM = "programator"                                # ← Change this freely (e.g. "programátor", "data analyst", "java")
 SORT_BY = "relevance"                                 # optional – can be "validity_from", "salary_desc", etc.
 
 USER_AGENT = (
@@ -25,7 +25,7 @@ DEBUG_DIR = "debug_pages_profesia_sk"
 # OUTPUT_FILE = f"profesia_sk_{SEARCH_TERM.replace(' ', '_')}_jobs.csv"
 OUTPUT_FILE = f"jobs.csv"
 
-MAX_PAGES = 2  # start small – increase slowly
+MAX_PAGES = 10  # start small – increase slowly
 
 # Auto-create debug folder
 os.makedirs(DEBUG_DIR, exist_ok=True)
@@ -216,4 +216,4 @@ if __name__ == "__main__":
     # pip install playwright tenacity beautifulsoup4 lxml
     # playwright install
 
-    main(max_pages=2)  # increase slowly
+    main(max_pages=10)  # increase slowly
