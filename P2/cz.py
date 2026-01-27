@@ -24,7 +24,7 @@ USER_AGENT = (
 DEBUG_DIR = "debug_pages_profesia_cz"
 OUTPUT_FILE = f"profesia_cz_{SEARCH_TERM.replace(' ', '_')}_jobs.csv"
 
-MAX_PAGES = 2  # start small – increase later
+MAX_PAGES = 40  # start small – increase later
 
 # Auto-create debug folder
 os.makedirs(DEBUG_DIR, exist_ok=True)
@@ -214,4 +214,4 @@ if __name__ == "__main__":
     # pip install playwright tenacity beautifulsoup4 lxml
     # playwright install
 
-    main(max_pages=2)
+    main(max_pages=40)
