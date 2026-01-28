@@ -1,8 +1,0 @@
-My Front-End Coding Skills:
-Css
-Git
-Html
-Java
-Javascript
-Python
-React

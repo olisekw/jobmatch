@@ -9,13 +9,11 @@ import sys
 
 # List your scripts in order
 scripts = [
-    "skills.py",
-    "sk.py",
-    "sort.py",
-    "des.py",
-    "job_skills.py",
-    "compare.py",
-    "results.py"
+    "cz.py",
+    "sk.py", #scrapes sk offers
+    "des.py", #gets description
+    "fill.py", #sorts salary/location/title
+    "results.py" #gets compatbility final look"
 ]
 
 def run_script(script_name):

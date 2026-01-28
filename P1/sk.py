@@ -2,70 +2,46 @@ import csv
 import time
 import random
 import re
-import os
 from urllib.parse import urljoin, quote
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from bs4 import BeautifulSoup
+from pathlib import Path
 
 # ────────────────────────────────────────────────
 # CONFIG – change these values here only
 # ────────────────────────────────────────────────
-
 BASE_URL = "https://www.profesia.sk/praca/"
-SEARCH_TERM = "programator"                                # ← Change this freely (e.g. "programátor", "data analyst", "java")
-SORT_BY = "relevance"                                 # optional – can be "validity_from", "salary_desc", etc.
-
+SEARCH_TERM = "developer"  # ← change freely
+SORT_BY = "relevance"        # alternatives: "validity_from", "salary_desc", ...
 USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
 )
-
-DEBUG_DIR = "debug_pages_profesia_sk"
-# OUTPUT_FILE = f"profesia_sk_{SEARCH_TERM.replace(' ', '_')}_jobs.csv"
-OUTPUT_FILE = f"jobs.csv"
-
-MAX_PAGES = 10  # start small – increase slowly
-
-# Auto-create debug folder
-os.makedirs(DEBUG_DIR, exist_ok=True)
+OUTPUT_FILE = "jobs.csv"     # file to **append** to (not overwrite)
+MAX_PAGES = 5               # ← start small (1–3), then increase
 
 # ────────────────────────────────────────────────
 # LOAD PAGE WITH RETRY
 # ────────────────────────────────────────────────
-
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1.5, min=8, max=60),
     retry=retry_if_exception_type(PlaywrightTimeoutError),
+    reraise=True
 )
 def load_page(page, url, pg_num):
     print(f"→ Page {pg_num}: {url}")
     resp = page.goto(url, wait_until="networkidle", timeout=65000)
     if resp is None or resp.status >= 400:
         raise RuntimeError(f"Bad status: {resp.status if resp else 'no response'}")
-
-    try:
-        page.wait_for_selector("ul.list li.list-row, a[href*='/praca/']", timeout=35000)
-        print(" → Job listings detected")
-    except PlaywrightTimeoutError:
-        print(" → No jobs after wait – possible block / layout change / empty page")
-
-    page.wait_for_timeout(random.randint(3000, 8000))  # human-like pause
-    html = page.content()
-
-    debug_file = os.path.join(DEBUG_DIR, f"debug_page_{pg_num}.html")
-    with open(debug_file, "w", encoding="utf-8") as f:
-        f.write(html)
-    print(f" → Debug saved: {debug_file}")
-
-    return html
-
+    page.wait_for_timeout(random.randint(3000, 8000))  # human-like delay
+    return page.content()
 
 # ────────────────────────────────────────────────
-# PARSE JOBS FROM HTML
+# PARSE JOBS FROM HTML – ALL TEXT LOWERCASE
 # ────────────────────────────────────────────────
-
 def parse_jobs(html, base_url):
     soup = BeautifulSoup(html, "lxml")
     jobs = []
@@ -73,7 +49,7 @@ def parse_jobs(html, base_url):
 
     list_container = soup.find("ul", class_="list")
     if not list_container:
-        print(" → No <ul class='list'> found – possible block or site change")
+        print(" → No <ul class='list'> found – possible layout change / block")
         return jobs
 
     for li in list_container.find_all("li", class_="list-row"):
@@ -95,28 +71,37 @@ def parse_jobs(html, base_url):
 
         full_link = urljoin(base_url, href)
 
-        title_span = title_a.find("span", class_="title")
-        title = title_span.get_text(strip=True) if title_span else title_a.get_text(strip=True)
+        # ALL TEXT TO LOWERCASE
+        title = (
+            title_a.find("span", class_="title").get_text(strip=True).lower()
+            if title_a.find("span", class_="title")
+            else title_a.get_text(strip=True).lower()
+        )
 
-        company_span = li.find("span", class_="employer")
-        company = company_span.get_text(strip=True) if company_span else "N/A"
+        company = (
+            li.find("span", class_="employer").get_text(strip=True).lower()
+            if li.find("span", class_="employer")
+            else "n/a"
+        )
 
         loc_span = li.find("span", class_="job-location")
-        location = loc_span.get_text(strip=True) if loc_span else "N/A"
-        loc_title = loc_span.get("title", "").strip() if loc_span else ""
+        location = loc_span.get_text(strip=True).lower() if loc_span else "n/a"
+        loc_title = loc_span.get("title", "").strip().lower() if loc_span else ""
         if loc_title and loc_title != location:
             location = f"{location} ({loc_title})"
 
-        # Salary – tuned for Slovak (EUR/mesiac, hod., Od, do…)
-        salary = "N/A"
-        sal_span = li.find("span", class_=re.compile(r"label.*green|label.*salary|label.*money"))
+        salary = "n/a"
+        sal_span = li.find("span", class_=re.compile(r"label.*(?:green|salary|money)"))
         if sal_span:
-            text = sal_span.get_text(strip=True).replace("\xa0", " ").strip()
+            text = sal_span.get_text(strip=True).replace("\xa0", " ").strip().lower()
             if any(c.isdigit() for c in text):
                 salary = text
 
-        fresh_span = li.find("span", class_="info")
-        freshness = fresh_span.get_text(strip=True) if fresh_span else "N/A"
+        freshness = (
+            li.find("span", class_="info").get_text(strip=True).lower()
+            if li.find("span", class_="info")
+            else "n/a"
+        )
 
         jobs.append({
             "Title": title,
@@ -128,19 +113,31 @@ def parse_jobs(html, base_url):
             "Offer_ID": offer_id,
         })
 
-    print(f" → Extracted {len(jobs)} valid jobs")
     return jobs
 
-
 # ────────────────────────────────────────────────
-# MAIN – SEARCH + PAGINATION
+# MAIN – APPEND MODE (adds new jobs, keeps existing)
 # ────────────────────────────────────────────────
-
 def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
-    all_jobs = []
+    all_new_jobs = []
+    existing_offer_ids = set()
+
+    output_path = Path(output_file)
+
+    # 1. Load existing jobs to avoid duplicates
+    if output_path.is_file():
+        print(f"Existing file found: {output_file} – loading to skip duplicates...")
+        with output_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                offer_id = row.get("Offer_ID", "").strip()
+                if offer_id:
+                    existing_offer_ids.add(offer_id)
+
+        print(f"→ Found {len(existing_offer_ids)} existing unique jobs")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)  # change to False to watch browser
+        browser = p.chromium.launch(headless=True)  # ← False for debugging
         context = browser.new_context(
             user_agent=USER_AGENT,
             viewport={"width": 1280, "height": 1024},
@@ -152,7 +149,7 @@ def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
         print("Navigating to profesia.sk...")
         page.goto(BASE_URL, wait_until="networkidle", timeout=45000)
 
-        # Perform search using real Slovak parameter
+        # Try interactive search
         try:
             print(f"Performing search: '{SEARCH_TERM}'")
             search_input = page.wait_for_selector(
@@ -165,19 +162,18 @@ def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
             )
             search_input.fill(SEARCH_TERM)
             search_input.press("Enter")
-
             page.wait_for_load_state("networkidle", timeout=40000)
             print(" → Search results loaded")
         except Exception as e:
-            print(f" → Search failed: {e}")
-            # Fallback: direct URL if typing fails
+            print(f" → Interactive search failed: {e}")
+            # Fallback direct URL
             encoded = quote(SEARCH_TERM)
             search_url = f"{BASE_URL}?search_anywhere={encoded}&sort_by={SORT_BY}"
-            print(f" → Falling back to direct URL: {search_url}")
+            print(f" → Using direct URL: {search_url}")
             page.goto(search_url, wait_until="networkidle", timeout=45000)
 
-        # Scrape pages
         current_url = page.url
+
         for pg in range(1, max_pages + 1):
             if pg > 1:
                 separator = "&" if "?" in current_url else "?"
@@ -188,32 +184,56 @@ def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
             try:
                 html = load_page(page, url, pg)
                 page_jobs = parse_jobs(html, BASE_URL)
-                print(f" → Page {pg} → {len(page_jobs)} jobs")
-                all_jobs.extend(page_jobs)
+                print(f" → Page {pg} → {len(page_jobs)} jobs found")
+
+                # Filter out already existing jobs
+                new_jobs = [job for job in page_jobs if job["Offer_ID"] not in existing_offer_ids]
+                print(f"   → {len(new_jobs)} new unique jobs this run")
+
+                all_new_jobs.extend(new_jobs)
+
+                # Update set so next pages don't duplicate
+                for job in new_jobs:
+                    existing_offer_ids.add(job["Offer_ID"])
+
             except Exception as e:
                 print(f" → FAILED page {pg}: {e}")
                 break
 
-            time.sleep(random.uniform(10, 22))  # polite delay
+            if pg < max_pages:
+                time.sleep(random.uniform(10, 22))  # polite delay
 
         browser.close()
 
-    # Save to CSV
-    if all_jobs:
+    # ── Append new jobs to CSV (create if not exists) ─────────────
+    if all_new_jobs:
         keys = ["Title", "Company", "Location", "Salary", "Freshness", "Link", "Offer_ID"]
-        with open(output_file, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            writer.writerows(all_jobs)
-        print(f"\nDone! Saved {len(all_jobs)} jobs for '{SEARCH_TERM}' → {output_file}")
-    else:
-        print("\nNo jobs scraped. Check files in folder: {DEBUG_DIR}")
-        print("Likely causes: CAPTCHA/Cloudflare block or changed site layout.")
 
+        file_exists = output_path.is_file()
+        mode = "a" if file_exists else "w"
+
+        with output_path.open(mode, newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=keys)
+
+            # Write header only if file is new
+            if not file_exists:
+                writer.writeheader()
+
+            writer.writerows(all_new_jobs)
+
+        total_jobs = len(existing_offer_ids) + len(all_new_jobs)
+        print(f"\nDone! Appended {len(all_new_jobs)} new jobs")
+        print(f"Total unique jobs in file now: {total_jobs}")
+        print(f"File: {output_path.resolve()}")
+    else:
+        print("\nNo new jobs found to append.")
+        if output_path.is_file():
+            print(f"Existing file unchanged: {output_path.resolve()}")
+        else:
+            print("No file created (no jobs scraped).")
 
 if __name__ == "__main__":
-    # Install dependencies once if needed:
+    # Remember:
     # pip install playwright tenacity beautifulsoup4 lxml
     # playwright install
-
-    main(max_pages=10)  # increase slowly
+    main(max_pages=MAX_PAGES)

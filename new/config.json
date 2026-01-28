@@ -1,0 +1,31 @@
+{
+  "scraper": {
+    "base_url": "https://www.profesia.sk/praca/",
+    "categories": ["IT", "programator", "vyvojari"],
+    "locations": ["bratislava", "kosice", "remote"],
+    "max_pages": 5,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "delay_min_sec": 2.1,
+    "delay_max_sec": 5.8
+  },
+  "filters": {
+    "junior_keywords": [
+      "junior", "jr.", "absolvent", "graduate", "trainee", "začiatočník",
+      "entry level", "bez praxe", "vhodné aj pre absolventov"
+    ],
+    "exclude_keywords": [
+      "senior", "lead", "head", "principal", "expert"
+    ],
+    "min_salary_eur": 1200,
+    "tech_stack_interested": ["python", "javascript", "java", ".net", "sql"]
+  },
+  "output": {
+    "latest_results_file": "data/results_latest.csv",
+    "history_file": "data/jobs_history.csv",
+    "only_new_jobs": true
+  },
+  "notifications": {
+    "enabled": false,
+    "discord_webhook_url": "https://discord.com/api/webhooks/..."
+  }
+}
