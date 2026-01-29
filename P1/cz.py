@@ -20,7 +20,7 @@ USER_AGENT = (
     "Chrome/131.0.0.0 Safari/537.36"
 )
 OUTPUT_FILE = "jobs.csv"             # file to **append** to
-MAX_PAGES = 5                       # ← adjust as needed
+MAX_PAGES = 20                       # ← adjust as needed
 
 # ────────────────────────────────────────────────
 # LOAD PAGE WITH RETRY
