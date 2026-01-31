@@ -27,3 +27,4 @@
 [] 3. onsite/hybrid + kosice = go thru
 [] 4. remote = go thru
 [] 6. Skills = company skills - moje skills = <0 100% match >1 podla toho jaka moc je odchhylka
+

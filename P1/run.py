@@ -9,9 +9,8 @@ import sys
 
 # List your scripts in order
 scripts = [
-    "cz.py",
     "sk.py", #scrapes sk offers
-    "des.py", #gets description
+    "cz.py", #scrapes cz offers
     "fill.py", #sorts salary/location/title
     "results.py" #gets compatbility final look"
 ]

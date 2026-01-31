@@ -2,105 +2,150 @@ import csv
 import time
 import random
 import re
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, urlencode
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from bs4 import BeautifulSoup
 from pathlib import Path
 
 # ────────────────────────────────────────────────
-# CONFIG – change these values here only
+# CONFIG – tune here
 # ────────────────────────────────────────────────
 BASE_URL = "https://www.profesia.cz/prace/"
-SEARCH_TERM = "developer"          # ← change freely
-SORT_BY = "relevance"                # possible: "datum_nahoru", "plat_sestupne", ...
+SEARCH_TERMS = [
+    "developer",
+    "programator",
+    "inzinýr",
+    "engineer",
+    "vývojář",
+    "javascript",
+    "frontend",
+    "fullstack",
+    "react",
+
+]
+SORT_BY = "relevance"          # "relevance", "plat_sestupne", "datum_nahoru"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
-OUTPUT_FILE = "jobs.csv"             # file to **append** to
-MAX_PAGES = 20                       # ← adjust as needed
+OUTPUT_FILE = "jobs.csv"
+
+# Speed / safety
+MODE = "normal"  # or "fast"
+
+if MODE == "fast":
+    MIN_PAGE_DELAY = 1.8
+    MAX_PAGE_DELAY = 4.5
+    GOTO_EXTRA_WAIT_MS = 400
+    TIMEOUT = 32000
+    RETRY_COUNT = 3
+    print("Mode: FAST")
+else:
+    MIN_PAGE_DELAY = 5.5
+    MAX_PAGE_DELAY = 13.0
+    GOTO_EXTRA_WAIT_MS = 2000
+    TIMEOUT = 50000
+    RETRY_COUNT = 5
+    print("Mode: NORMAL")
 
 # ────────────────────────────────────────────────
-# LOAD PAGE WITH RETRY
-# ────────────────────────────────────────────────
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1.5, min=8, max=60),
-    retry=retry_if_exception_type(PlaywrightTimeoutError),
-    reraise=True
-)
-def load_page(page, url, pg_num):
-    print(f"→ Page {pg_num}: {url}")
-    resp = page.goto(url, wait_until="networkidle", timeout=65000)
+@retry(stop=stop_after_attempt(RETRY_COUNT),
+       wait=wait_exponential(multiplier=1.2, min=3, max=25),
+       retry=retry_if_exception_type(PlaywrightTimeoutError),
+       reraise=True)
+def load_page(page, url, pg_num, term):
+    print(f"[{term}] Page {pg_num}: {url}")
+    resp = page.goto(url, wait_until="networkidle", timeout=TIMEOUT)
     if resp is None or resp.status >= 400:
         raise RuntimeError(f"Bad status: {resp.status if resp else 'no response'}")
-    page.wait_for_timeout(random.randint(3000, 8000))  # human-like delay
+    page.wait_for_timeout(random.randint(GOTO_EXTRA_WAIT_MS, GOTO_EXTRA_WAIT_MS + 1800))
     return page.content()
 
 # ────────────────────────────────────────────────
-# PARSE JOBS FROM HTML – ALL TEXT LOWERCASE
-# ────────────────────────────────────────────────
-def parse_jobs(html, base_url):
+def parse_jobs(html, base_url, search_term_lower, existing_offer_ids):
     soup = BeautifulSoup(html, "lxml")
     jobs = []
     seen_ids = set()
+    matched_count = 0
+    skipped_count = 0
 
-    list_container = soup.find("ul", class_="list")
-    if not list_container:
-        print(" → No <ul class='list'> found – possible layout change / block")
-        return jobs
+    # Flexible container search (CZ layout varies)
+    container = (
+        soup.find("ul", class_="list") or
+        soup.find("div", class_=re.compile(r"(offer|job|result|list|items)")) or
+        soup.find("div", class_=re.compile(r"results|search|offer")) or
+        soup.select_one("main, [role=main], .content") or
+        soup.body
+    )
 
-    for li in list_container.find_all("li", class_="list-row"):
-        if "promo-tile" in li.get("class", []):
+    if not container:
+        print(" → No main results container found")
+        return jobs, 0, 0
+
+    # Broader candidate selectors
+    candidates = container.select(
+        'li[class*="row"], div[class*="offer"], div[class*="job"], div[class*="item"], '
+        'div[class*="card"], article, a[href*="/prace/"]'
+    )
+
+    for el in candidates:
+        # Find link
+        a = el.find("a", href=re.compile(r"/prace/")) or (el if el.name == "a" else None)
+        if not a:
             continue
 
-        title_a = li.find("h2").find("a") if li.find("h2") else None
-        if not title_a:
-            continue
-
-        offer_id = title_a.get("id", "").replace("offer", "")
-        if not offer_id or offer_id in seen_ids:
-            continue
-        seen_ids.add(offer_id)
-
-        href = title_a.get("href", "")
-        if not href or "/prace/" not in href:
+        href = a.get("href", "")
+        if "/prace/" not in href or len(href) < 15:
             continue
 
         full_link = urljoin(base_url, href)
 
-        title = (
-            title_a.find("span", class_="title").get_text(strip=True).lower()
-            if title_a.find("span", class_="title")
-            else title_a.get_text(strip=True).lower()
-        )
+        # Offer ID – prefer number from URL slug
+        offer_id_match = re.search(r"/(\d+)(?:/|\?|$)", href)
+        offer_id = offer_id_match.group(1) if offer_id_match else a.get("id", "").replace("offer", "")
+        if not offer_id:
+            offer_id = str(hash(href) % 10**10)  # fallback
+        if offer_id in seen_ids or offer_id in existing_offer_ids:
+            skipped_count += 1
+            continue
+        seen_ids.add(offer_id)
 
-        company = (
-            li.find("span", class_="employer").get_text(strip=True).lower()
-            if li.find("span", class_="employer")
-            else "n/a"
-        )
+        # Title
+        title_el = a.find(["span", "h2", "h3"], class_=re.compile(r"(title|nazev|position)")) or a
+        title = title_el.get_text(strip=True).lower() if title_el else "n/a"
 
-        loc_span = li.find("span", class_="job-location")
-        location = loc_span.get_text(strip=True).lower() if loc_span else "n/a"
-        loc_title = loc_span.get("title", "").strip().lower() if loc_span else ""
-        if loc_title and loc_title != location:
-            location = f"{location} ({loc_title})"
+        if search_term_lower not in title:
+            continue
 
+        matched_count += 1
+
+        # Company
+        company = "n/a"
+        co_el = el.find(string=re.compile(r"(?i)(s\.r\.o\.|a\.s\.|spol\. s r.o.|v.o.s.)")) or \
+                el.find(["span", "div"], class_=re.compile(r"(employer|firma|company|zaměstnavatel)"))
+        if co_el:
+            company = (co_el.get_text(strip=True).lower() if hasattr(co_el, 'get_text') else co_el.strip().lower())
+
+        # Location
+        location = "n/a"
+        loc_el = el.find(string=re.compile(r"(?i)(praha|brno|ostrava|plzeň|olomouc|liberec|pardubice|hradec|ústí|karlovy|zlín|jihlava|remote|home office)"))
+        if loc_el:
+            location = loc_el.strip().lower()
+
+        # Salary
         salary = "n/a"
-        sal_span = li.find("span", class_=re.compile(r"label.*(?:green|salary|money|plat|mzda)"))
-        if sal_span:
-            text = sal_span.get_text(strip=True).replace("\xa0", " ").strip().lower()
-            if any(c.isdigit() for c in text):
-                salary = text
+        sal_txt = el.get_text(" ", strip=True).lower()
+        if any(c.isdigit() for c in sal_txt) and any(w in sal_txt for w in ["kč", "mzda", "plat", "od ", "až "]):
+            salary = sal_txt.split("kč")[0].rsplit(" ", 2)[-2:]   # rough last number phrase
+            salary = " ".join(salary).strip() + " kč"
 
-        freshness = (
-            li.find("span", class_="info").get_text(strip=True).lower()
-            if li.find("span", class_="info")
-            else "n/a"
-        )
+        # Freshness
+        freshness = "n/a"
+        fresh_txt = el.find(string=re.compile(r"(?i)(před|dnes|včera|hod|min|den|týden|měsíc)"))
+        if fresh_txt:
+            freshness = fresh_txt.strip().lower()
 
         jobs.append({
             "Title": title,
@@ -110,33 +155,46 @@ def parse_jobs(html, base_url):
             "Freshness": freshness,
             "Link": full_link,
             "Offer_ID": offer_id,
+            "Description": "",
+            "Skills": "",
+            "Worktype": "",
+            "Seniority": "",
+            "EmploymentType": "",
+            "Status": ""
         })
 
-    return jobs
+    return jobs, matched_count, skipped_count
 
 # ────────────────────────────────────────────────
-# MAIN – APPEND ONLY NEW JOBS (based on Offer_ID)
+def build_search_url(term, sort_by):
+    params = {"search_anywhere": term, "sort_by": sort_by}
+    return BASE_URL + "?" + urlencode(params)
+
 # ────────────────────────────────────────────────
-def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
+def main():
     all_new_jobs = []
     existing_offer_ids = set()
+    output_path = Path(OUTPUT_FILE)
 
-    output_path = Path(output_file)
+    is_first_run = not output_path.is_file()
 
-    # Load existing Offer_IDs to prevent duplicates
+    if is_first_run:
+        print(f"\n=== FIRST RUN ===\nNo {OUTPUT_FILE} → full scan")
+    else:
+        print(f" → Incremental scan (existing jobs will be skipped by Offer_ID)")
+
     if output_path.is_file():
-        print(f"Existing file found: {output_file} → loading IDs to skip duplicates...")
         with output_path.open("r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                offer_id = row.get("Offer_ID", "").strip()
-                if offer_id:
-                    existing_offer_ids.add(offer_id)
-
-        print(f"→ Found {len(existing_offer_ids)} existing unique jobs")
+                oid = row.get("Offer_ID", "").strip()
+                if oid:
+                    existing_offer_ids.add(oid)
+        print(f" Loaded {len(existing_offer_ids):,} existing jobs (will skip duplicates)")
+        print("")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)  # ← False for debugging
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent=USER_AGENT,
             viewport={"width": 1280, "height": 1024},
@@ -145,96 +203,78 @@ def main(max_pages=MAX_PAGES, output_file=OUTPUT_FILE):
         )
         page = context.new_page()
 
-        print("Navigating to profesia.cz...")
-        page.goto(BASE_URL, wait_until="networkidle", timeout=45000)
+        for term in SEARCH_TERMS:
+            term_lower = term.lower()
+            print(f"{'─'*60}\nTerm: {term}\n{'─'*60}")
 
-        # Try interactive search
-        try:
-            print(f"Performing search: '{SEARCH_TERM}'")
-            search_input = page.wait_for_selector(
-                "input[placeholder*='Pozice' i], "
-                "input[placeholder*='Hledat' i], "
-                "input[name='q'], input[name='search_anywhere'], "
-                "input[type='search'], "
-                "input[aria-label*='hledat' i], "
-                "input[placeholder*='Název pozice' i]",
-                timeout=30000
-            )
-            search_input.fill(SEARCH_TERM)
-            search_input.press("Enter")
-            page.wait_for_load_state("networkidle", timeout=40000)
-            print(" → Search results loaded")
-        except Exception as e:
-            print(f" → Interactive search failed: {e}")
-            # Fallback direct URL
-            encoded = quote(SEARCH_TERM)
-            search_url = f"{BASE_URL}?search_anywhere={encoded}&sort_by={SORT_BY}"
-            print(f" → Using direct URL: {search_url}")
-            page.goto(search_url, wait_until="networkidle", timeout=45000)
-
-        current_url = page.url
-
-        for pg in range(1, max_pages + 1):
-            if pg > 1:
-                # Czech site uses pagenum
-                separator = "&" if "?" in current_url else "?"
-                url = f"{current_url}{separator}page_num={pg}"
-            else:
-                url = current_url
+            search_url = build_search_url(term, SORT_BY)
 
             try:
-                html = load_page(page, url, pg)
-                page_jobs = parse_jobs(html, BASE_URL)
-                print(f" → Page {pg} → {len(page_jobs)} jobs found")
-
-                # Filter out already known jobs
-                new_jobs = [job for job in page_jobs if job["Offer_ID"] not in existing_offer_ids]
-                print(f"   → {len(new_jobs)} new unique jobs")
-
-                all_new_jobs.extend(new_jobs)
-
-                # Update known IDs
-                for job in new_jobs:
-                    existing_offer_ids.add(job["Offer_ID"])
-
+                page.goto(search_url, wait_until="networkidle", timeout=TIMEOUT)
+                current_url = page.url
             except Exception as e:
-                print(f" → FAILED page {pg}: {e}")
-                break
+                print(f" Failed to load search: {e}")
+                continue
 
-            if pg < max_pages:
-                time.sleep(random.uniform(10, 22))  # polite delay
+            pg = 1
+            while True:
+                url = current_url if pg == 1 else f"{current_url}&page_num={pg}" if "?" in current_url else f"{current_url}?page_num={pg}"
+                try:
+                    html = load_page(page, url, pg, term)
+                    page_jobs, matched_count, skipped_count = parse_jobs(
+                        html, BASE_URL, term_lower, existing_offer_ids
+                    )
+                    print(f" Page {pg:3} → {len(page_jobs)} new | {matched_count} matched | {skipped_count} skipped")
+                    all_new_jobs.extend(page_jobs)
+                    existing_offer_ids.update(j["Offer_ID"] for j in page_jobs)
+
+                    if matched_count == 0 and pg > 1:
+                        print(f" No more matches on page {pg} → stopping term")
+                        break
+                except Exception as e:
+                    print(f" Page {pg} failed: {e}")
+                    break
+
+                pg += 1
+                time.sleep(random.uniform(MIN_PAGE_DELAY, MAX_PAGE_DELAY))
 
         browser.close()
 
-    # ── Append new jobs to CSV (create if not exists) ─────────────
+    # ── Save (append if exists) ────────────────────────────────────
     if all_new_jobs:
-        keys = ["Title", "Company", "Location", "Salary", "Freshness", "Link", "Offer_ID"]
+        fieldnames = [
+            "Title", "Company", "Location", "Salary", "Freshness",
+            "Link", "Offer_ID",
+            "Description", "Skills", "Worktype", "Seniority", "EmploymentType",
+            "Status"
+        ]
 
-        file_exists = output_path.is_file()
-        mode = "a" if file_exists else "w"
+        exists = output_path.is_file()
+        mode = "a" if exists else "w"
 
         with output_path.open(mode, newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
+            writer = csv.DictWriter(
+                f,
+                fieldnames=fieldnames,
+                quoting=csv.QUOTE_MINIMAL,
+                quotechar='"',
+                escapechar='\\'
+            )
 
-            # Write header only when creating new file
-            if not file_exists:
+            if not exists:
                 writer.writeheader()
 
-            writer.writerows(all_new_jobs)
+            for job in all_new_jobs:
+                row = {k: job.get(k, "") for k in fieldnames}
+                writer.writerow(row)
 
-        total_jobs = len(existing_offer_ids) + len(all_new_jobs)
-        print(f"\nDone! Appended {len(all_new_jobs)} new jobs")
-        print(f"Total unique jobs in file now: {total_jobs}")
-        print(f"File: {output_path.resolve()}")
+        print(f"\nFinished.")
+        print(f" Added {len(all_new_jobs)} new jobs")
+        print(f" Total unique jobs now: {len(existing_offer_ids)}")
+        print(f" File: {output_path.resolve()}")
     else:
-        print("\nNo new jobs found to append.")
-        if output_path.is_file():
-            print(f"Existing file unchanged: {output_path.resolve()}")
-        else:
-            print("No file created (no jobs scraped).")
+        print("\nNo new jobs found in this run.")
+
 
 if __name__ == "__main__":
-    # Remember:
-    # pip install playwright tenacity beautifulsoup4 lxml
-    # playwright install
-    main(max_pages=MAX_PAGES)
+    main()
