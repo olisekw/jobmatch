@@ -30,7 +30,7 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
-OUTPUT_FILE = "jobs.csv"
+OUTPUT_FILE = "./data/jobs.csv"
 
 # Speed / safety
 MODE = "normal"  # or "fast"

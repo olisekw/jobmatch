@@ -1,113 +1,151 @@
 """
 declined.py
-Mark jobs as rejected and remove them from applied.csv
-
-Usage:
-    python declined.py 3 7 12
-    → moves those ranks from applied.csv back to jobs.csv with Status = "rejected"
-    → removes them from applied.csv
-    → ranks 2 and 3 (if not mentioned) remain in applied.csv
-
-Requires:
-- applied.csv has columns: Rank (or Applied_Rank), Link, ...
-- jobs.csv has columns: Link, Status, ...
+Shows current applied.csv with temporary numbers 1..n (WITHOUT showing links or location)
+You type which ones to decline → removed from applied.csv + Status = "rejected" in jobs.csv
+Remaining jobs stay in applied.csv unchanged (no renumbering)
 """
+
 import sys
 import pandas as pd
 from pathlib import Path
 
-# ── Config ───────────────────────────────────────────────────────────────────
 DATA_DIR = Path("./data")
-JOBS_FILE   = DATA_DIR / "jobs.csv"
+JOBS_FILE    = DATA_DIR / "jobs.csv"
 APPLIED_FILE = DATA_DIR / "applied.csv"
 
-STATUS_REJECTED = "rejected"          # or "x" if you prefer
-RANK_COLUMN = "Rank"          # change to "Rank" if you use that name
+STATUS_REJECTED = "rejected"
 
-# ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: python {Path(__file__).name} <rank1> <rank2> ...")
-        print(f"       Ranks refer to the '{RANK_COLUMN}' column in {APPLIED_FILE}")
-        sys.exit(1)
+def show_applied_list():
+    if not APPLIED_FILE.is_file() or APPLIED_FILE.stat().st_size == 0:
+        print("applied.csv is empty or missing.")
+        sys.exit(0)
 
     try:
-        declined_ranks = {int(arg) for arg in sys.argv[1:]}
-        print(f"Declining ranks: {sorted(declined_ranks)}")
+        df = pd.read_csv(APPLIED_FILE)
+    except Exception as e:
+        print(f"Cannot read applied.csv: {e}")
+        sys.exit(1)
+
+    if 'Link' not in df.columns:
+        print("applied.csv missing 'Link' column – cannot continue.")
+        sys.exit(1)
+
+    print("\n" + "═" * 100)
+    print(" Current applied jobs (temporary numbers for this run)")
+    print("═" * 100)
+
+    # Preferred columns to show – no Location, no Salary
+    preferred_cols = ['Title', 'Company', 'match_score']
+    display_cols = [c for c in preferred_cols if c in df.columns]
+
+    if not display_cols:
+        # Fallback: show everything except Link, Location, Salary
+        display_cols = [c for c in df.columns if c not in ['Link', 'Location', 'Salary']]
+
+    display = df[display_cols].copy().reset_index()
+    display['#'] = display.index + 1
+    display = display[['#'] + display_cols]
+
+    # Shorten long text for better table readability
+    for col in ['Title', 'Company']:
+        if col in display.columns:
+            display[col] = display[col].apply(
+                lambda x: str(x)[:60] + '…' if len(str(x)) > 60 else str(x)
+            )
+
+    # Dynamic col_space – only include keys that actually exist in columns
+    col_space_dict = {
+        '#': 5,
+        'Title': 65,
+        'Company': 45,
+    }
+    # Add match_score spacing only if the column is present
+    if 'match_score' in display.columns:
+        col_space_dict['match_score'] = 12
+
+    print(display.to_string(
+        index=False,
+        col_space=col_space_dict,
+        justify='left',
+        na_rep='–'
+    ))
+
+    print("═" * 100 + "\n")
+
+
+def main():
+    show_applied_list()
+
+    print("Enter the temporary numbers of jobs you want to DECLINE (space separated)")
+    print("Example: 1 3  → those jobs → rejected + removed from applied.csv")
+    print("Empty line or Ctrl+C → do nothing and exit\n")
+
+    try:
+        line = input("→ ").strip()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        return
+
+    if not line:
+        print("Nothing selected → exiting.")
+        return
+
+    try:
+        to_decline = {int(x) for x in line.split()}
     except ValueError:
-        print("Error: All arguments must be integers")
-        sys.exit(1)
+        print("Only numbers allowed.")
+        return
 
-    applied_path = Path(APPLIED_FILE)
-    jobs_path = Path(JOBS_FILE)
+    try:
+        applied = pd.read_csv(APPLIED_FILE)
+        jobs   = pd.read_csv(JOBS_FILE)
+    except Exception as e:
+        print(f"Error reading files: {e}")
+        return
 
-    if not applied_path.is_file():
-        print(f"Error: {APPLIED_FILE} not found")
-        sys.exit(1)
-    if not jobs_path.is_file():
-        print(f"Error: {JOBS_FILE} not found")
-        sys.exit(1)
+    if 'Link' not in applied.columns or 'Link' not in jobs.columns:
+        print("Missing 'Link' in one of the files.")
+        return
 
-    print("Loading files...")
-    applied_df = pd.read_csv(applied_path)
-    jobs_df = pd.read_csv(jobs_path)
+    if 'Status' not in jobs.columns:
+        jobs['Status'] = ""
 
-    if RANK_COLUMN not in applied_df.columns:
-        print(f"Error: {APPLIED_FILE} is missing column '{RANK_COLUMN}'")
-        sys.exit(1)
-    if 'Link' not in applied_df.columns:
-        print(f"Error: {APPLIED_FILE} missing 'Link'")
-        sys.exit(1)
-    if 'Link' not in jobs_df.columns:
-        print(f"Error: {JOBS_FILE} missing 'Link'")
-        sys.exit(1)
+    removed = 0
+    updated = 0
 
-    # Normalize links (recommended even if case-sensitive)
-    applied_df['link_norm'] = applied_df['Link'].astype(str).str.strip().str.lower()
-    jobs_df['link_norm']    = jobs_df['Link'].astype(str).str.strip().str.lower()
+    # Temporary 1-based index for user selection
+    applied = applied.reset_index(drop=True)
+    applied['temp_idx'] = applied.index + 1
 
-    if 'Status' not in jobs_df.columns:
-        jobs_df['Status'] = ""
-
-    updated_count = 0
-    removed_count = 0
-
-    for rank in declined_ranks:
-        row = applied_df[applied_df[RANK_COLUMN] == rank]
+    for num in to_decline:
+        row = applied[applied['temp_idx'] == num]
         if row.empty:
-            print(f"Warning: {RANK_COLUMN} {rank} not found in {APPLIED_FILE}")
+            print(f"Number {num} not found")
             continue
 
-        link_norm = row['link_norm'].iloc[0]
-        mask = jobs_df['link_norm'] == link_norm
+        link = row['Link'].iloc[0]
+        mask = jobs['Link'] == link
 
         if mask.any():
-            jobs_df.loc[mask, 'Status'] = STATUS_REJECTED
-            updated_count += mask.sum()
-            print(f"  → {RANK_COLUMN} {rank} → Status = '{STATUS_REJECTED}'")
-        else:
-            print(f"Warning: No matching job found in jobs.csv for {RANK_COLUMN} {rank}")
+            jobs.loc[mask, 'Status'] = STATUS_REJECTED
+            updated += 1
+            print(f"→ #{num} → marked 'rejected' in jobs.csv")
 
-        # Remove from applied_df
-        applied_df = applied_df[applied_df[RANK_COLUMN] != rank]
-        removed_count += 1
+        # Remove from applied
+        applied = applied[applied['temp_idx'] != num]
+        removed += 1
 
-    # Cleanup helper column
-    applied_df = applied_df.drop(columns=['link_norm'], errors='ignore')
-    jobs_df    = jobs_df.drop(columns=['link_norm'], errors='ignore')
+    # Clean up temp column and save
+    applied.drop(columns=['temp_idx'], inplace=True, errors='ignore')
 
-    # Save
-    applied_df.to_csv(APPLIED_FILE, index=False, encoding='utf-8')
-    jobs_df.to_csv(JOBS_FILE, index=False, encoding='utf-8')
+    applied.to_csv(APPLIED_FILE, index=False)
+    jobs.to_csv(JOBS_FILE, index=False)
 
-    print("\n" + "═" * 60)
-    print("Finished processing declines")
-    print(f" → Jobs updated to '{STATUS_REJECTED}': {updated_count}")
-    print(f" → Removed from applied.csv  : {removed_count}")
-    print(f" → Saved: {JOBS_FILE}")
-    print(f" → Saved: {APPLIED_FILE}")
-    print("═" * 60)
+    print("\n" + "═" * 50)
+    print(f"Removed from applied.csv     : {removed}")
+    print(f"Marked rejected in jobs.csv : {updated}")
+    print("═" * 50)
 
 
 if __name__ == "__main__":

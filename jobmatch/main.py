@@ -14,7 +14,7 @@ scripts = [
     "./src/sk.py", #scrapes sk offers
     "./src/cz.py", #scrapes cz offers
     "./src/fill.py", #sorts salary/location/title
-    "./src/results.py" #gets compatbility final look
+    "./src/results.py", #gets compatbility final look
     "./src/choose.py" #you choose what jobs you applied to
 ]
 
