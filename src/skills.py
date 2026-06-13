@@ -1,21 +1,25 @@
-# create_user_csv.py
-# Creates user.csv with ONLY: Location, Skills, Seniority, Worktype
-# inputs.txt → highest priority
-# resume.txt → fills missing fields (especially Skills)
+# Extract user profile from CV and preferences
+# Creates user.csv with: Location, Skills, Seniority, Worktype
+# REQUIRES: inputs.txt and resume.txt
 
 import csv
 import re
+import sys
 from pathlib import Path
 
-# ── Configuration ─────────────────────────────────────────────────
-INPUT_TXT       = "inputs.txt"
-RESUME_TXT      = "resume.txt"
-OUTPUT_CSV      = "user.csv"
+# Import config
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+
+INPUT_TXT = config.INPUT_TXT
+RESUME_TXT = config.RESUME_TXT
+OUTPUT_CSV = config.USER_CSV
 
 CSV_COLUMNS = ["Location", "Skills", "Seniority", "Worktype"]
 
-# ── Skill patterns (kept fully) ───────────────────────────────────
-coding_patterns = [
+# Skill detection patterns (case-insensitive)
+CODING_PATTERNS = [
     r'html[5]?', r'css[3]?', r'sass', r'scss', r'less',
     r'javascript', r'typescript', r'js', r'es6', r'es2015',
     r'react', r'react\.?js', r'next\.?js', r'react native',
@@ -23,7 +27,7 @@ coding_patterns = [
     r'angular', r'angularjs',
     r'svelte', r'sveltekit',
     r'tailwind', r'tailwindcss', r'bootstrap', r'material ui', r'mui',
-    r'python', r'c', r'c\+\+', r'c#', r'java', r'ruby', r'php', r'go', r'rust',
+    r'python', r'c', r'c\+\+', r'c#', r'ruby', r'php', r'rust',
     r'sql', r'mysql', r'ms sql', r'mssql', r'oracle', r'postgres', r'postgresql', r'mongodb', r'redis',
     r'node\.?js', r'django', r'flask', r'spring', r'laravel', r'express',
     r'graphql', r'apollo', r'relay',
@@ -32,20 +36,21 @@ coding_patterns = [
     r'sqlalchemy', r'beautifulsoup', r'requests',
     r'git', r'github', r'gitlab', r'docker', r'kubernetes', r'ci/cd', r'jenkins',
     r'webpack', r'vite', r'parcel', r'gulp', r'grunt', r'npm', r'yarn', r'pnpm',
-    r'mendix', r'power ?bi', r'business central', r'dynamics 365',
+    r'mendix', r'power ?bi', r'business central', r'dynamics 365',r'flutter',r'firebase',
 ]
 
-# ── Detection patterns ────────────────────────────────────────────
-location_patterns = r"(bratislava|ba|košice|kosice|ke|košický|žilina|nitra|trnava|prešov|banská bystrica|praha|brno|ostrava|plzeň)"
-seniority_patterns = r"(junior|medior|senior|začiatočník|začínajúci|stredne pokročilý|skúsený|absolvent|entry level|mid level)"
-worktype_patterns = r"(remote|fully remote|100% remote|práca z domu|home ?office|work from home|hybrid|hybridný|kombinovaný režim|onsite|v kancelárii|office|na pracovisku)"
+# Location detection patterns (Slovak cities)
+LOCATION_PATTERN = r"(bratislava|ba|košice|kosice|ke|košický|žilina|nitra|trnava|prešov|banská bystrica)"
+SENIORITY_PATTERN = r"(junior|medior|senior|začiatočník|začínajúci|stredne pokročilý|skúsený|absolvent|entry level|mid level)"
+WORKTYPE_PATTERN = r"(remote|fully remote|100% remote|práca z domu|home ?office|work from home|hybrid|hybridný|kombinovaný režim|onsite|v kancelárii|office|na pracovisku)"
 
 def extract_skills(text: str) -> str:
+    """Extract recognized skills from text."""
     if not text.strip():
         return "N/A"
     text_lower = text.lower()
     found = set()
-    for pattern in coding_patterns:
+    for pattern in CODING_PATTERNS:
         for match in re.findall(pattern, text_lower, re.IGNORECASE):
             clean = re.sub(r'[^a-z0-9\s\.]', '', match.strip())
             clean = re.sub(r'\s+', ' ', clean).strip()
@@ -56,6 +61,7 @@ def extract_skills(text: str) -> str:
 
 
 def guess_category(text: str, pattern: str, mapping: dict) -> str:
+    """Extract category from text using pattern and mapping."""
     if not text:
         return "N/A"
     text_lower = text.lower()
@@ -69,26 +75,27 @@ def guess_category(text: str, pattern: str, mapping: dict) -> str:
 
 
 def parse_inputs(file_path: Path) -> dict:
+    """Parse user preferences from inputs.txt."""
     row = {col: "N/A" for col in CSV_COLUMNS}
 
     if not file_path.is_file():
-        print(f"{INPUT_TXT} not found → will use resume only")
-        return row
+        print(f"\nERROR: {INPUT_TXT} not found!")
+        print("Create inputs.txt with your job preferences:")
+        print("  Bratislava")
+        print("  Senior")
+        print("  Remote")
+        print("  React, TypeScript, Node.js")
+        sys.exit(1)
 
     text = file_path.read_text(encoding="utf-8").strip().lower()
-
-    # Split on commas, newlines, etc.
     items = re.split(r'[,\n;]|alebo|or|\s*[,;]\s*', text)
     items = [item.strip() for item in items if item.strip()]
 
     for item in items:
-        # Location
-        if re.search(location_patterns, item):
+        if re.search(LOCATION_PATTERN, item):
             row["Location"] = item.title()
             continue
-
-        # Seniority
-        if re.search(seniority_patterns, item):
+        if re.search(SENIORITY_PATTERN, item):
             if "senior" in item:
                 row["Seniority"] = "senior"
             elif "medior" in item or "stredne" in item or "mid" in item:
@@ -96,9 +103,7 @@ def parse_inputs(file_path: Path) -> dict:
             else:
                 row["Seniority"] = "junior"
             continue
-
-        # Worktype
-        if re.search(worktype_patterns, item):
+        if re.search(WORKTYPE_PATTERN, item):
             if "remote" in item or "z domu" in item or "home office" in item:
                 row["Worktype"] = "remote"
             elif "hybrid" in item:
@@ -111,47 +116,48 @@ def parse_inputs(file_path: Path) -> dict:
 
 
 def main():
+    """Extract user profile and save to user.csv."""
     inputs_path = Path(INPUT_TXT)
     resume_path = Path(RESUME_TXT)
 
-    # 1. Parse user preferences (highest priority)
+    # Check required files exist
+    if not resume_path.is_file():
+        print(f"\nERROR: {RESUME_TXT} not found!")
+        print("Run pdf_to_txt.py first to convert cv.pdf to resume.txt")
+        sys.exit(1)
+
+    # Parse inputs (required)
     row = parse_inputs(inputs_path)
 
-    # 2. Load resume
-    resume_text = ""
-    if resume_path.is_file():
-        resume_text = resume_path.read_text(encoding="utf-8").strip()
-        print(f"Resume loaded: {len(resume_text)} characters")
-    else:
-        print(f"{RESUME_TXT} not found → Skills will be N/A")
+    # Load resume
+    resume_text = resume_path.read_text(encoding="utf-8").strip()
+    print(f"Resume loaded: {len(resume_text)} characters")
 
-    # 3. Fill missing fields ONLY from resume — inputs.txt overrides!
+    # Fill missing fields from resume
     if row["Skills"] == "N/A" and resume_text:
         row["Skills"] = extract_skills(resume_text)
 
-    # Optional fallback for other fields
     mapping_work = {"remote": ["remote", "z domu", "home"], "hybrid": ["hybrid"], "onsite": ["office", "kancelárii"]}
     mapping_sen = {"junior": ["junior", "zač"], "medior": ["medior", "mid"], "senior": ["senior"]}
 
     if row["Seniority"] == "N/A" and resume_text:
-        row["Seniority"] = guess_category(resume_text, seniority_patterns, mapping_sen)
+        row["Seniority"] = guess_category(resume_text, SENIORITY_PATTERN, mapping_sen)
 
     if row["Worktype"] == "N/A" and resume_text:
-        row["Worktype"] = guess_category(resume_text, worktype_patterns, mapping_work)
+        row["Worktype"] = guess_category(resume_text, WORKTYPE_PATTERN, mapping_work)
 
-    # 4. Save
     out_path = Path(OUTPUT_CSV)
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         writer.writerow(row)
 
-    print("\n" + "═"*60)
-    print("user.csv created (only requested columns):")
+    print("\n" + "="*60)
+    print("user.csv created:")
     for col, val in row.items():
         print(f"  {col:12} : {val}")
-    print("═"*60)
-    print(f"File saved → {out_path.resolve()}")
+    print("="*60)
+    print(f"File saved: {out_path.resolve()}")
 
 
 if __name__ == "__main__":

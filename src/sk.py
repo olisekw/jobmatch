@@ -2,32 +2,23 @@ import csv
 import time
 import random
 import re
+import sys
 from urllib.parse import urljoin, urlencode
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from bs4 import BeautifulSoup
 
-# ────────────────────────────────────────────────
-# CONFIG
-# ────────────────────────────────────────────────
+# Import config
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 
-
-## 155line - change count days LAST SCAN 4FEB
 BASE_URL = "https://www.profesia.sk/praca/"
-SEARCH_TERMS = [
-    "developer", "programator", "inzinier", "vývojár", "programmer",
-    "software", "javascript", "react", "front", "fullstack", "native"
-]
+SEARCH_TERMS = config.SEARCH_TERMS
 SORT_BY = "relevance"
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
-OUTPUT_FILE = "./data/jobs.csv"
+USER_AGENT = config.USER_AGENT
+OUTPUT_FILE = config.JOBS_CSV
 
-# === NEW BEHAVIOR YOU REQUESTED ===
 FORCE_LAST_DAY_WHEN_CSV_EXISTS = True      # ← if True and file exists → count_days=1
 
 # Speed profile
@@ -155,7 +146,7 @@ def main():
     # Decide count_days logic
     if output_path.is_file() and output_path.stat().st_size > 0:
         if FORCE_LAST_DAY_WHEN_CSV_EXISTS:
-            effective_count_days = 2
+            effective_count_days = 7
             print(f"CSV exists → forcing count_days=1 (last 24h)")
         else:
             effective_count_days = None

@@ -1,21 +1,16 @@
-# run_all_scripts.py
-# Runs all scripts in the specified order, one after another
-
-# python run_all_scripts.py
-
+# Run all scripts in specified order
 
 import subprocess
 import sys
 
-# List your scripts in order
+# List scripts in execution order
 scripts = [
     "./src/pdf_to_txt.py",
     "./src/skills.py",
-    "./src/sk.py", #scrapes sk offers
-    "./src/cz.py", #scrapes cz offers
-    "./src/fill.py", #sorts salary/location/title
-    "./src/results.py", #gets compatbility final look
-    "./src/choose.py" #you choose what jobs you applied to
+    "./src/sk.py",
+    "./src/fill.py",
+    "./src/results.py",
+    "./src/choose.py"
 ]
 
 def run_script(script_name):

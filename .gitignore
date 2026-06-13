@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+
+# Data & sensitive files
+data/cv.pdf
+data/resume.txt
+data/user.csv
+data/jobs.csv
+data/results.csv
+data/applied.csv
+data/inputs.txt
+data/oldjobs*.csv
+
+# Debug files
+debug_output/
+debug_pages_*/
+*.html
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
