@@ -1,0 +1,292 @@
+/* JobMatch — monochrome design system */
+
+:root {
+  --ink: #111111;
+  --paper: #ffffff;
+  --gray-1: #f6f6f6;
+  --gray-2: #e5e5e5;
+  --gray-3: #bbbbbb;
+  --gray-4: #777777;
+  --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+a { color: var(--ink); }
+
+/* ── Nav ─────────────────────────────────────────────── */
+nav {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 0 2rem;
+  height: 60px;
+  background: var(--ink);
+  color: var(--paper);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+nav .brand {
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--paper);
+  text-decoration: none;
+}
+nav .links { display: flex; gap: 0.25rem; margin-left: auto; }
+nav .links a {
+  color: var(--gray-3);
+  text-decoration: none;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+nav .links a:hover { color: var(--paper); }
+nav .links a.active { color: var(--ink); background: var(--paper); font-weight: 600; }
+
+main { max-width: 1080px; margin: 0 auto; padding: 2.5rem 2rem 5rem; }
+
+/* ── Typography ──────────────────────────────────────── */
+h1 { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.35rem; }
+.subtitle { color: var(--gray-4); margin-bottom: 2.2rem; }
+h2 {
+  font-size: 0.8rem; font-weight: 700; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--gray-4);
+  margin: 2.4rem 0 1rem; padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--gray-2);
+}
+
+/* ── Buttons & inputs ────────────────────────────────── */
+.btn {
+  display: inline-block;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.55rem 1.3rem;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: opacity 0.12s;
+}
+.btn:hover { opacity: 0.82; }
+.btn:disabled { background: var(--gray-3); border-color: var(--gray-3); cursor: default; opacity: 1; }
+.btn.ghost { background: var(--paper); color: var(--ink); border-color: var(--gray-3); }
+.btn.ghost:hover { border-color: var(--ink); opacity: 1; }
+.btn.small { padding: 0.3rem 0.8rem; font-size: 0.78rem; }
+.btn.big { padding: 0.85rem 2.2rem; font-size: 0.95rem; }
+
+input[type="text"], input[type="number"], textarea, select {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--gray-3);
+  background: var(--paper);
+  color: var(--ink);
+  width: 100%;
+}
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--ink); outline-offset: -1px; }
+textarea { resize: vertical; min-height: 70px; }
+select { width: auto; cursor: pointer; }
+
+input[type="range"] { accent-color: var(--ink); width: 100%; }
+input[type="checkbox"] { accent-color: var(--ink); width: 16px; height: 16px; cursor: pointer; }
+
+label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3rem; }
+.hint { font-size: 0.78rem; color: var(--gray-4); font-weight: 400; }
+
+/* ── Cards / stats ───────────────────────────────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--gray-2);
+  border: 1px solid var(--gray-2);
+  margin-bottom: 2rem;
+}
+.stat {
+  background: var(--paper);
+  padding: 1.4rem 1.2rem;
+}
+.stat .value { font-size: 2.1rem; font-weight: 800; font-family: var(--mono); line-height: 1.1; }
+.stat .label {
+  font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--gray-4); margin-top: 0.3rem;
+}
+.stat.invert { background: var(--ink); color: var(--paper); }
+.stat.invert .label { color: var(--gray-3); }
+
+.panel { border: 1px solid var(--gray-2); padding: 1.5rem; margin-bottom: 1.5rem; }
+
+/* ── Job rows ────────────────────────────────────────── */
+.job {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 1.2rem;
+  padding: 1.1rem 0;
+  border-bottom: 1px solid var(--gray-2);
+  align-items: start;
+}
+.score {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 1rem;
+  text-align: center;
+  padding: 0.45rem 0;
+  border: 1.5px solid var(--ink);
+}
+.score.high { background: var(--ink); color: var(--paper); }
+.score.mid { background: var(--paper); color: var(--ink); }
+.score.low { border-color: var(--gray-3); color: var(--gray-4); }
+.score.none { border-color: var(--gray-2); color: var(--gray-3); font-weight: 400; }
+
+.job .title { font-weight: 700; text-decoration: none; }
+.job .title:hover { text-decoration: underline; }
+.job .meta { color: var(--gray-4); font-size: 0.85rem; margin-top: 0.15rem; }
+.job .tags { margin-top: 0.45rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.tag {
+  font-size: 0.7rem;
+  font-family: var(--mono);
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--gray-2);
+  color: var(--gray-4);
+  text-transform: lowercase;
+}
+.tag.match { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.tag.src { background: var(--gray-1); border-color: var(--gray-1); }
+.tag.fact { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+
+.job .actions { display: flex; flex-direction: column; gap: 0.4rem; min-width: 96px; }
+
+/* ── Filter bar ──────────────────────────────────────── */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+  padding: 1rem 0 1.4rem;
+  border-bottom: 2px solid var(--ink);
+  margin-bottom: 0.4rem;
+}
+.filters .field { display: flex; flex-direction: column; gap: 0.25rem; }
+.filters .field > span {
+  font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--gray-4); font-weight: 600;
+}
+.filters input[type="text"] { width: 200px; }
+
+.tabs { display: flex; border: 1px solid var(--ink); }
+.tabs button {
+  font: inherit; font-size: 0.8rem; font-weight: 600;
+  padding: 0.45rem 1rem;
+  background: var(--paper); color: var(--ink);
+  border: none; border-right: 1px solid var(--ink);
+  cursor: pointer;
+}
+.tabs button:last-child { border-right: none; }
+.tabs button.active { background: var(--ink); color: var(--paper); }
+
+.range-wrap { display: flex; align-items: center; gap: 0.6rem; width: 210px; }
+.range-wrap output { font-family: var(--mono); font-weight: 700; min-width: 42px; text-align: right; }
+
+/* ── Tables (tracker) ────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; font-size: 0.7rem; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--gray-4);
+  padding: 0.6rem 0.75rem; border-bottom: 2px solid var(--ink);
+}
+td { padding: 0.85rem 0.75rem; border-bottom: 1px solid var(--gray-2); vertical-align: top; }
+tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9rem 1.2rem; }
+
+.status-select { font-size: 0.82rem; padding: 0.3rem 0.5rem; }
+.notes-input { font-size: 0.85rem; border-color: var(--gray-2); }
+.notes-input:hover { border-color: var(--gray-3); }
+
+/* ── Settings ────────────────────────────────────────── */
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.2rem; }
+.weight-row { display: grid; grid-template-columns: 110px 1fr 52px; gap: 0.8rem; align-items: center; margin-bottom: 0.7rem; }
+.weight-row .val { font-family: var(--mono); font-weight: 700; text-align: right; }
+.check-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.5rem 0; font-size: 0.9rem; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
+.chip {
+  font: inherit; font-size: 0.78rem; padding: 0.25rem 0.75rem;
+  border: 1px solid var(--gray-3); background: var(--paper); cursor: pointer;
+}
+.chip.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+.dropzone {
+  border: 2px dashed var(--gray-3);
+  padding: 2.2rem;
+  text-align: center;
+  color: var(--gray-4);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.dropzone:hover, .dropzone.drag { border-color: var(--ink); color: var(--ink); }
+
+/* ── Scan overlay ────────────────────────────────────── */
+#scan-overlay {
+  position: fixed; inset: 0;
+  background: rgba(255, 255, 255, 0.96);
+  display: none;
+  align-items: center; justify-content: center;
+  z-index: 100;
+}
+#scan-overlay.open { display: flex; }
+.scan-box { text-align: center; max-width: 480px; padding: 2rem; }
+.scan-box .spinner {
+  width: 46px; height: 46px;
+  margin: 0 auto 1.5rem;
+  border: 3px solid var(--gray-2);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.scan-box h3 { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.scan-box .phase { font-family: var(--mono); font-size: 0.85rem; color: var(--gray-4); margin: 0.8rem 0 0.4rem; min-height: 1.4em; }
+.scan-box .counts { font-family: var(--mono); font-size: 0.8rem; color: var(--gray-4); margin-bottom: 1.6rem; }
+
+/* ── Toast ───────────────────────────────────────────── */
+#toast {
+  position: fixed; bottom: 1.5rem; left: 50%;
+  transform: translate(-50%, 150%);
+  visibility: hidden;
+  background: var(--ink); color: var(--paper);
+  padding: 0.7rem 1.4rem;
+  font-size: 0.85rem;
+  transition: transform 0.25s ease, visibility 0.25s;
+  z-index: 200;
+  max-width: 80vw;
+}
+#toast.show { transform: translate(-50%, 0); visibility: visible; }
+
+/* ── Misc ────────────────────────────────────────────── */
+.empty { padding: 3rem 0; text-align: center; color: var(--gray-4); }
+.muted { color: var(--gray-4); }
+.mono { font-family: var(--mono); }
+.count-note { font-size: 0.8rem; color: var(--gray-4); padding: 0.6rem 0; }
+.right { margin-left: auto; }
+.mt { margin-top: 1rem; }
+
+@media (max-width: 720px) {
+  nav { padding: 0 1rem; gap: 1rem; }
+  main { padding: 1.5rem 1rem 4rem; }
+  .job { grid-template-columns: 60px 1fr; }
+  .job .actions { grid-column: 1 / -1; flex-direction: row; }
+}

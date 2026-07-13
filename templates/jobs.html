@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}JobMatch — Jobs{% endblock %}
+{% block content %}
+
+<h1>Jobs</h1>
+<p class="subtitle">Every scraped offer, scored against your profile.</p>
+
+<div class="filters">
+  <div class="field">
+    <span>Status</span>
+    <div class="tabs" id="status-tabs">
+      <button data-status="new" class="active">Matched</button>
+      <button data-status="new-all">All new</button>
+      <button data-status="applied">Applied</button>
+      <button data-status="declined">Declined</button>
+    </div>
+  </div>
+  <div class="field">
+    <span>Min score <span class="hint">(matched view)</span></span>
+    <div class="range-wrap">
+      <input type="range" id="f-score" min="0" max="100" step="5" value="20">
+      <output id="f-score-out">20%</output>
+    </div>
+  </div>
+  <div class="field">
+    <span>Search</span>
+    <input type="text" id="f-q" placeholder="title or company…">
+  </div>
+  <div class="field">
+    <span>Source</span>
+    <select id="f-source"><option value="">All</option></select>
+  </div>
+  <div class="field">
+    <span>Sort</span>
+    <select id="f-sort">
+      <option value="score">Best match</option>
+      <option value="date">Newest</option>
+    </select>
+  </div>
+</div>
+
+<div class="count-note" id="count-note"></div>
+<div id="job-list"><div class="empty">Loading…</div></div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+const state = { status: "new", useThreshold: true };
+
+async function init() {
+  const settings = await api("/api/settings");
+  const slider = document.getElementById("f-score");
+  slider.value = settings.min_match_score;
+  document.getElementById("f-score-out").textContent = `${settings.min_match_score}%`;
+
+  const sourceSel = document.getElementById("f-source");
+  for (const [name, label] of Object.entries(settings.available_sources)) {
+    sourceSel.insertAdjacentHTML("beforeend",
+      `<option value="${esc(name)}">${esc(label)}</option>`);
+  }
+  await loadJobs();
+}
+
+function actionsFor(job) {
+  if (job.status === "new") return `
+    <button class="btn small" data-act="applied">Applied ✓</button>
+    <button class="btn small ghost" data-act="declined">Decline</button>`;
+  if (job.status === "declined") return `
+    <button class="btn small ghost" data-act="new">Restore</button>`;
+  return `<button class="btn small ghost" data-act="new">Un-apply</button>`;
+}
+
+async function loadJobs() {
+  const params = new URLSearchParams({
+    status: state.status,
+    sort: document.getElementById("f-sort").value,
+  });
+  const q = document.getElementById("f-q").value.trim();
+  if (q) params.set("q", q);
+  const source = document.getElementById("f-source").value;
+  if (source) params.set("source", source);
+  if (state.status === "new" && state.useThreshold) {
+    params.set("min_score", document.getElementById("f-score").value);
+  }
+
+  const data = await api(`/api/jobs?${params}`);
+  const list = document.getElementById("job-list");
+  document.getElementById("count-note").textContent =
+    `${data.count} job${data.count === 1 ? "" : "s"}${data.count === 500 ? " (showing first 500)" : ""}`;
+
+  if (!data.jobs.length) {
+    list.innerHTML = '<div class="empty">Nothing here. Try lowering the score filter or run a scan.</div>';
+    return;
+  }
+
+  list.innerHTML = data.jobs.map(j => `
+    <div class="job" data-id="${j.id}">
+      <div class="score ${scoreClass(j.match_score)}" title="${esc(breakdownTitle(j.score_breakdown))}">${scoreText(j.match_score)}</div>
+      <div>
+        <a class="title" href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.title)}</a>
+        <div class="meta" title="${j.posted_at ? "posted " + esc(j.posted_at) : ""}">${jobMeta(j)}</div>
+        <div class="tags">
+          ${factTags(j)}
+          ${(j.skills || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 8)
+              .map(s => `<span class="tag">${esc(s)}</span>`).join("")}
+        </div>
+      </div>
+      <div class="actions">${actionsFor(j)}</div>
+    </div>`).join("");
+}
+
+document.getElementById("job-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const jobId = btn.closest(".job").dataset.id;
+  btn.disabled = true;
+  try {
+    await api(`/api/jobs/${jobId}/status`, { json: { status: btn.dataset.act } });
+    toast(btn.dataset.act === "applied" ? "Added to tracker" : "Updated");
+    await loadJobs();
+  } catch (err) {
+    toast(err.message);
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("status-tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  document.querySelectorAll("#status-tabs button").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  const value = btn.dataset.status;
+  state.status = value === "new-all" ? "new" : value;
+  state.useThreshold = value === "new";
+  loadJobs();
+});
+
+let qTimer;
+document.getElementById("f-q").addEventListener("input", () => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(loadJobs, 250);
+});
+document.getElementById("f-score").addEventListener("input", (e) => {
+  document.getElementById("f-score-out").textContent = `${e.target.value}%`;
+});
+document.getElementById("f-score").addEventListener("change", loadJobs);
+document.getElementById("f-source").addEventListener("change", loadJobs);
+document.getElementById("f-sort").addEventListener("change", loadJobs);
+window.onScanFinished = loadJobs;
+
+init();
+</script>
+{% endblock %}

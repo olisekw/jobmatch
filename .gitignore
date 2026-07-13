@@ -17,11 +17,14 @@ data/results.csv
 data/applied.csv
 data/inputs.txt
 data/oldjobs*.csv
+data/jobmatch.db
+data/jobmatch.db-wal
+data/jobmatch.db-shm
 
 # Debug files
 debug_output/
 debug_pages_*/
-*.html
+index.html
 
 # IDE
 .vscode/

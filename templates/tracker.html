@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}JobMatch — Tracker{% endblock %}
+{% block content %}
+
+<h1>Application tracker</h1>
+<p class="subtitle">Where you sent your CV, and how it's going.</p>
+
+<div class="stat-grid" id="tracker-stats"></div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:26%">Position</th>
+      <th>Company</th>
+      <th>Applied</th>
+      <th>Status</th>
+      <th style="width:30%">Notes</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody id="app-rows"></tbody>
+</table>
+<div class="empty" id="empty-note" style="display:none">
+  No applications yet — mark a job as Applied on the <a href="/jobs">Jobs</a> page.
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+const STATUSES = ["applied", "interview", "offer", "rejected", "withdrawn", "no_response"];
+const LABELS = {
+  applied: "Applied", interview: "Interview", offer: "Offer",
+  rejected: "Rejected", withdrawn: "Withdrawn", no_response: "No response",
+};
+
+function statusOptions(current) {
+  return STATUSES.map(s =>
+    `<option value="${s}" ${s === current ? "selected" : ""}>${LABELS[s]}</option>`
+  ).join("");
+}
+
+async function loadApplications() {
+  const data = await api("/api/applications");
+  const tbody = document.getElementById("app-rows");
+  document.getElementById("empty-note").style.display = data.count ? "none" : "block";
+
+  const byStatus = {};
+  for (const a of data.applications) byStatus[a.status] = (byStatus[a.status] || 0) + 1;
+  document.getElementById("tracker-stats").innerHTML = `
+    <div class="stat invert"><div class="value">${data.count}</div><div class="label">Total sent</div></div>
+    <div class="stat"><div class="value">${byStatus.interview || 0}</div><div class="label">Interviews</div></div>
+    <div class="stat"><div class="value">${byStatus.offer || 0}</div><div class="label">Offers</div></div>
+    <div class="stat"><div class="value">${byStatus.rejected || 0}</div><div class="label">Rejected</div></div>
+    <div class="stat"><div class="value">${(byStatus.applied || 0) + (byStatus.no_response || 0)}</div><div class="label">Waiting</div></div>`;
+
+  tbody.innerHTML = data.applications.map(a => `
+    <tr data-id="${a.id}">
+      <td><a class="title" href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}</a></td>
+      <td>${esc(a.company || "")}<div class="hint">${esc(a.source_label)}</div></td>
+      <td class="mono">${esc(a.applied_at)}</td>
+      <td><select class="status-select">${statusOptions(a.status)}</select></td>
+      <td><input type="text" class="notes-input" value="${esc(a.notes)}" placeholder="add a note…"></td>
+      <td>${a.events.length ? `<button class="btn small ghost btn-history">History (${a.events.length})</button>` : ""}</td>
+    </tr>
+    ${a.events.length ? `
+    <tr class="events-row" data-for="${a.id}" style="display:none">
+      <td colspan="6">${a.events.map(e =>
+        `<div class="mono">${esc(e.event_at.replace("T", " "))} — ${esc(e.from_status)} → ${esc(e.to_status)}${e.note ? " · " + esc(e.note) : ""}</div>`
+      ).join("")}</td>
+    </tr>` : ""}`).join("");
+}
+
+document.getElementById("app-rows").addEventListener("change", async (e) => {
+  const row = e.target.closest("tr[data-id]");
+  if (!row) return;
+  const id = row.dataset.id;
+  try {
+    if (e.target.classList.contains("status-select")) {
+      await api(`/api/applications/${id}`, { method: "PATCH", json: { status: e.target.value } });
+      toast("Status updated");
+      await loadApplications();
+    } else if (e.target.classList.contains("notes-input")) {
+      await api(`/api/applications/${id}`, { method: "PATCH", json: { notes: e.target.value } });
+      toast("Note saved");
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+document.getElementById("app-rows").addEventListener("click", (e) => {
+  const btn = e.target.closest(".btn-history");
+  if (!btn) return;
+  const id = btn.closest("tr").dataset.id;
+  const eventsRow = document.querySelector(`tr.events-row[data-for="${id}"]`);
+  eventsRow.style.display = eventsRow.style.display === "none" ? "" : "none";
+});
+
+loadApplications();
+</script>
+{% endblock %}

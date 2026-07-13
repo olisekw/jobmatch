@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}JobMatch{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <nav>
+    <a class="brand" href="/">JobMatch</a>
+    <div class="links">
+      <a href="/" class="{{ 'active' if active == 'dashboard' }}">Dashboard</a>
+      <a href="/jobs" class="{{ 'active' if active == 'jobs' }}">Jobs</a>
+      <a href="/tracker" class="{{ 'active' if active == 'tracker' }}">Tracker</a>
+      <a href="/settings" class="{{ 'active' if active == 'settings' }}">Settings</a>
+    </div>
+  </nav>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="scan-overlay">
+    <div class="scan-box">
+      <div class="spinner"></div>
+      <h3>Scanning job boards</h3>
+      <div class="phase" id="scan-phase">starting…</div>
+      <div class="counts" id="scan-counts"></div>
+      <button class="btn ghost" id="scan-cancel">Cancel scan</button>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

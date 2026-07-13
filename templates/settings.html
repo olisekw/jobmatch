@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}JobMatch — Settings{% endblock %}
+{% block content %}
+
+<h1>Settings</h1>
+<p class="subtitle">Your profile, matching rules and scan configuration.</p>
+
+<h2>Resume</h2>
+<div class="panel">
+  <div class="dropzone" id="dropzone">
+    <strong>Drop your CV here</strong> or click to choose a PDF.<br>
+    <span class="hint" id="resume-state">Skills are extracted automatically and merged into your profile.</span>
+  </div>
+  <input type="file" id="resume-file" accept=".pdf" style="display:none">
+</div>
+
+<h2>Profile</h2>
+<div class="panel">
+  <div class="settings-grid">
+    <div>
+      <label>Location <span class="hint">city you want to work in</span></label>
+      <input type="text" id="s-location" placeholder="e.g. Košice">
+    </div>
+    <div>
+      <label>Seniority</label>
+      <select id="s-seniority">
+        <option value="">— not set —</option>
+        <option value="junior">Junior</option>
+        <option value="medior">Medior</option>
+        <option value="senior">Senior</option>
+      </select>
+    </div>
+    <div>
+      <label>Preferred worktype</label>
+      <select id="s-worktype">
+        <option value="">— not set —</option>
+        <option value="remote">Remote</option>
+        <option value="hybrid">Hybrid</option>
+        <option value="onsite">Onsite</option>
+      </select>
+    </div>
+  </div>
+  <div class="mt">
+    <label>Your skills <span class="hint">comma-separated; auto-filled from your CV</span></label>
+    <textarea id="s-skills" rows="3"></textarea>
+  </div>
+  <button class="btn mt" id="save-profile">Save profile</button>
+</div>
+
+<h2>Matching</h2>
+<div class="panel">
+  <label>Minimum match score: <output id="s-threshold-out" class="mono"></output></label>
+  <input type="range" id="s-threshold" min="0" max="100" step="5">
+  <p class="hint">Jobs scoring below this stay in "All new" but out of your matched list. Takes effect instantly — no re-scan needed.</p>
+
+  <div class="mt">
+    <label>Score weights <span class="hint">normalized to 100% on save</span></label>
+    <div class="weight-row"><span>Skills</span><input type="range" id="w-skill" min="0" max="100" step="5"><span class="val" id="w-skill-out"></span></div>
+    <div class="weight-row"><span>Worktype</span><input type="range" id="w-worktype" min="0" max="100" step="5"><span class="val" id="w-worktype-out"></span></div>
+    <div class="weight-row"><span>Location</span><input type="range" id="w-location" min="0" max="100" step="5"><span class="val" id="w-location-out"></span></div>
+    <div class="weight-row"><span>Seniority</span><input type="range" id="w-seniority" min="0" max="100" step="5"><span class="val" id="w-seniority-out"></span></div>
+  </div>
+
+  <div class="check-row">
+    <input type="checkbox" id="s-strict">
+    <label for="s-strict" style="margin:0">Strict seniority — a job with a different seniority scores 0</label>
+  </div>
+  <button class="btn mt" id="save-matching">Save matching rules</button>
+</div>
+
+<h2>Scanning</h2>
+<div class="panel">
+  <label>Presets</label>
+  <div class="chip-row" id="profile-chips"></div>
+
+  <div class="mt">
+    <label>Search terms <span class="hint">one per line or comma-separated; each term is searched on every enabled board</span></label>
+    <textarea id="s-terms" rows="4"></textarea>
+  </div>
+
+  <div class="settings-grid mt">
+    <div>
+      <label>Only jobs from the last <span class="hint">days (0 = full scan)</span></label>
+      <input type="number" id="s-days" min="0" max="90" style="width:110px">
+    </div>
+    <div>
+      <label>Job boards</label>
+      <div id="source-checks"></div>
+    </div>
+  </div>
+  <button class="btn mt" id="save-scan">Save scan settings</button>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+let settings;
+
+function bindRange(id, value, format) {
+  const input = document.getElementById(id);
+  const out = document.getElementById(`${id}-out`);
+  input.value = value;
+  out.textContent = format(value);
+  input.addEventListener("input", () => out.textContent = format(input.value));
+}
+
+async function init() {
+  settings = await api("/api/settings");
+
+  document.getElementById("s-location").value = settings.user_location || "";
+  document.getElementById("s-seniority").value = settings.user_seniority || "";
+  document.getElementById("s-worktype").value = settings.user_worktype || "";
+  document.getElementById("s-skills").value = (settings.user_skills || []).join(", ");
+
+  bindRange("s-threshold", settings.min_match_score, v => `${v}%`);
+  bindRange("w-skill", Math.round(settings.weight_skill * 100), v => `${v}`);
+  bindRange("w-worktype", Math.round(settings.weight_worktype * 100), v => `${v}`);
+  bindRange("w-location", Math.round(settings.weight_location * 100), v => `${v}`);
+  bindRange("w-seniority", Math.round(settings.weight_seniority * 100), v => `${v}`);
+  document.getElementById("s-strict").checked = !!settings.seniority_strict;
+
+  document.getElementById("s-terms").value = (settings.search_terms || []).join(", ");
+  document.getElementById("s-days").value = settings.scan_days;
+
+  document.getElementById("profile-chips").innerHTML =
+    Object.keys(settings.search_profiles).map(name =>
+      `<button class="chip ${name === settings.active_profile ? "active" : ""}" data-profile="${esc(name)}">${esc(name)}</button>`
+    ).join("");
+
+  document.getElementById("source-checks").innerHTML =
+    Object.entries(settings.available_sources).map(([name, label]) => `
+      <div class="check-row">
+        <input type="checkbox" id="src-${esc(name)}" value="${esc(name)}"
+               ${(settings.enabled_sources || []).includes(name) ? "checked" : ""}>
+        <label for="src-${esc(name)}" style="margin:0">${esc(label)}</label>
+      </div>`).join("");
+
+  if (settings.resume_text) {
+    document.getElementById("resume-state").textContent =
+      `Current CV: ${settings.resume_text.length} characters extracted. Upload a new PDF to replace it.`;
+  }
+}
+
+async function save(payload, message) {
+  try {
+    const res = await api("/api/settings", { method: "PUT", json: payload });
+    toast(message + (res.rescored ? " — all jobs rescored" : ""));
+    settings = await api("/api/settings");
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+document.getElementById("save-profile").addEventListener("click", () => save({
+  user_location: document.getElementById("s-location").value.trim().toLowerCase(),
+  user_seniority: document.getElementById("s-seniority").value,
+  user_worktype: document.getElementById("s-worktype").value,
+  user_skills: document.getElementById("s-skills").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+}, "Profile saved"));
+
+document.getElementById("save-matching").addEventListener("click", () => save({
+  min_match_score: Number(document.getElementById("s-threshold").value),
+  weight_skill: Number(document.getElementById("w-skill").value) / 100,
+  weight_worktype: Number(document.getElementById("w-worktype").value) / 100,
+  weight_location: Number(document.getElementById("w-location").value) / 100,
+  weight_seniority: Number(document.getElementById("w-seniority").value) / 100,
+  seniority_strict: document.getElementById("s-strict").checked,
+}, "Matching rules saved"));
+
+document.getElementById("save-scan").addEventListener("click", () => save({
+  search_terms: document.getElementById("s-terms").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+  scan_days: Number(document.getElementById("s-days").value) || 0,
+  enabled_sources: [...document.querySelectorAll("#source-checks input:checked")].map(c => c.value),
+  active_profile: document.querySelector("#profile-chips .chip.active")?.dataset.profile || "custom",
+}, "Scan settings saved"));
+
+document.getElementById("profile-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  document.querySelectorAll("#profile-chips .chip").forEach(c => c.classList.remove("active"));
+  chip.classList.add("active");
+  document.getElementById("s-terms").value =
+    settings.search_profiles[chip.dataset.profile].join(", ");
+});
+
+/* Resume upload */
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("resume-file");
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("drag");
+  if (e.dataTransfer.files.length) uploadResume(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => {
+  if (fileInput.files.length) uploadResume(fileInput.files[0]);
+});
+
+async function uploadResume(file) {
+  const stateEl = document.getElementById("resume-state");
+  stateEl.textContent = "Uploading and analyzing…";
+  const form = new FormData();
+  form.append("resume", file);
+  try {
+    const res = await api("/api/resume", { method: "POST", body: form });
+    stateEl.textContent =
+      `Done — ${res.characters} characters read, skills detected: ${res.detected_skills.join(", ") || "none"}.`;
+    document.getElementById("s-skills").value = res.user_skills.join(", ");
+    toast("Resume updated — all jobs rescored");
+  } catch (err) {
+    stateEl.textContent = "Upload failed.";
+    toast(err.message);
+  }
+}
+
+init();
+</script>
+{% endblock %}

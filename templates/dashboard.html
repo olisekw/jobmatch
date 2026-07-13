@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}JobMatch — Dashboard{% endblock %}
+{% block content %}
+
+<h1>Dashboard</h1>
+<p class="subtitle">Your job search at a glance.</p>
+
+<div class="stat-grid" id="stats">
+  <div class="stat invert"><div class="value" id="st-matched">–</div><div class="label">Matched now</div></div>
+  <div class="stat"><div class="value" id="st-new">–</div><div class="label">Untriaged</div></div>
+  <div class="stat"><div class="value" id="st-applied">–</div><div class="label">Applied</div></div>
+  <div class="stat"><div class="value" id="st-total">–</div><div class="label">Jobs in database</div></div>
+  <div class="stat"><div class="value" id="st-unscored">–</div><div class="label">Awaiting analysis</div></div>
+</div>
+
+<div class="panel">
+  <div style="display:flex; align-items:center; gap:1.5rem; flex-wrap:wrap;">
+    <button class="btn big" id="btn-scan">Scan job boards</button>
+    <div>
+      <div id="last-scan" class="muted">No scans yet.</div>
+      <div class="hint" id="scan-hint"></div>
+    </div>
+  </div>
+</div>
+
+<h2>Top matches</h2>
+<div id="top-jobs"><div class="empty">Loading…</div></div>
+<p class="mt"><a href="/jobs">See all matched jobs →</a></p>
+
+{% endblock %}
+{% block scripts %}
+<script>
+async function loadStats() {
+  const s = await api("/api/stats");
+  document.getElementById("st-matched").textContent = s.matched;
+  document.getElementById("st-new").textContent = s.new_jobs;
+  document.getElementById("st-applied").textContent = s.applied;
+  document.getElementById("st-total").textContent = s.total_jobs;
+  document.getElementById("st-unscored").textContent = s.unscored;
+  document.getElementById("scan-hint").textContent =
+    `Matched = untriaged jobs scoring ≥ ${s.threshold}% (change in Settings)`;
+
+  if (s.last_scan) {
+    const scan = s.last_scan;
+    const when = (scan.finished_at || scan.started_at || "").replace("T", " ");
+    document.getElementById("last-scan").textContent =
+      `Last scan: ${when} UTC — ${scan.status}, ${scan.found} new jobs, ${scan.enriched} analyzed` +
+      (scan.error ? ` (errors: ${scan.error})` : "");
+  }
+}
+
+async function loadTopJobs() {
+  const container = document.getElementById("top-jobs");
+  const stats = await api("/api/stats");
+  const data = await api(`/api/jobs?status=new&min_score=${stats.threshold}&sort=score`);
+  if (!data.jobs.length) {
+    container.innerHTML = '<div class="empty">No matches above the threshold yet. Run a scan or lower the threshold in Settings.</div>';
+    return;
+  }
+  container.innerHTML = data.jobs.slice(0, 5).map(j => `
+    <div class="job">
+      <div class="score ${scoreClass(j.match_score)}" title="${esc(breakdownTitle(j.score_breakdown))}">${scoreText(j.match_score)}</div>
+      <div>
+        <a class="title" href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.title)}</a>
+        <div class="meta">${jobMeta(j)}</div>
+        <div class="tags">${factTags(j)}</div>
+      </div>
+    </div>`).join("");
+}
+
+document.getElementById("btn-scan").addEventListener("click", () => scanOverlay.start());
+window.onScanFinished = () => { loadStats(); loadTopJobs(); };
+
+loadStats();
+loadTopJobs();
+</script>
+{% endblock %}
