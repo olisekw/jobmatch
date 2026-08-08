@@ -44,8 +44,11 @@ def _extract_category(text, patterns_dict, priority):
 
 
 def extract_worktype(text):
+    # Hybrid outranks remote: nearly every hybrid ad also says "home office" or
+    # "práca z domu", so whichever *qualifies* that phrase is the real answer.
+    # Only an ad with no hybrid marker at all is fully remote.
     return _extract_category(text, config.WORKTYPE_PATTERNS,
-                             priority=("remote", "hybrid", "onsite"))
+                             priority=("hybrid", "remote", "onsite"))
 
 
 def extract_seniority(text):

@@ -63,18 +63,26 @@ CODING_PATTERNS = [
 ]
 
 # ── Worktype / seniority / employment-type detection ─────────
+# Ads decline "práca" freely ("ponúkame prácu z domu"), so the noun is matched as
+# pr[áa]c\w* — the phrase after it is what carries the meaning.
 WORKTYPE_PATTERNS = {
     "remote": [
-        r'\b(práca z domu|home ?office|remote|fully remote|100% remote|práca na diaľku|remote work|work from home)\b',
-        r'\b(full ?remote|práca výlučne z domu|možnosť pracovať z domu kdekoľvek)\b',
+        r'\b(pr[áa]c\w* z domu|home ?office|remote|fully remote|100% remote|pr[áa]c\w* na diaľku|remote work|work from home)\b',
+        r'\b(full ?remote|pr[áa]c\w* výlučne z domu|možnosť pracovať z domu kdekoľvek)\b',
     ],
     "hybrid": [
         r'\b(hybrid|hybridný režim|hybridný model|kombinovaný režim|čiastočne v kancelárii|2[-–]?3? dni v office|3 dni home office)\b',
         r'\b(home ?office \+ office|niekoľko dní v kancelárii|hybridný pracovný model)\b',
+        # Explicitly *partial* work-from-home. Without these, "50% práce z domu"
+        # matches the plain remote pattern and the ad reads as fully remote — which
+        # then also hands it a full location score. Bare "možnosť práce z domu" is
+        # deliberately NOT here: fully-remote ads use that phrasing too.
+        r'\b(\d{1,3} ?% ?(času )?pr[áa]c\w* z domu|čiastočne ?(pr[áa]c\w*)? z domu|občasn\w* pr[áa]c\w* z domu)\b',
+        r'\b(kombináci\w* s? ?pr[áa]c\w* z domu|\d{1,2} ?(dni|dňa|deň|dní) (v týždni )?z domu)\b',
     ],
     "onsite": [
-        r'\b(onsite|v kancelárii|plne v office|práca v kancelárii|na pracovisku|vyžaduje prítomnosť|práca na mieste|denná dochádzka)\b',
-        r'\b(bez možnosti home office|žiadny home office|práca výlučne v office)\b',
+        r'\b(onsite|v kancelárii|plne v office|pr[áa]c\w* v kancelárii|na pracovisku|vyžaduje prítomnosť|pr[áa]c\w* na mieste|denná dochádzka)\b',
+        r'\b(bez možnosti home office|žiadny home office|pr[áa]c\w* výlučne v office)\b',
     ],
 }
 
@@ -92,14 +100,18 @@ SENIORITY_PATTERNS = {
 }
 
 EMPTYPE_PATTERNS = {
+    # The Slovak noun is "úväzok" (with ä); boards that strip diacritics emit
+    # "uvazok". Both spellings, and any case ending, are matched via [úu]v[äa]z\w*
+    # — the qualifier in front ("plný" / "čiastočný") is what fixes the meaning,
+    # so being permissive about the endings is safe.
     "fulltime": [
-        r'\b(pln[ýy] ?úvaz(e|ek|ku|ok)|plny ?uvaz(e|ek|ku|ok))\b',
-        r'\b(plný|plny) ?[úu]vaz(e|ek|ku|ok)\b',
+        r'\b(pln\w*|100%) ?[úu]v[äa]z\w*\b',
         r'\b(full ?time|full-time|fulltime)\b',
-        r'\b(100% ?[úu]vaz(e|ek|ok)|HPP|hlavný ?pracovný ?pomer)\b',
+        r'\b(HPP|hlavný ?pracovný ?pomer)\b',
     ],
     "parttime": [
-        r'\b(čiastočný ?úvaz(e|ek|ok)|ciastocny ?uvaz(e|ek|ok)|part ?time|part-time|polovičný ?úvazok|polcasový ?úvazok|\d+[-–]hodinový úväzok)\b',
+        r'\b(čiastočn\w*|ciastocn\w*|polovičn\w*|pol[čc]asov\w*|\d+[-–]hodinov\w*) ?[úu]v[äa]z\w*\b',
+        r'\b(part ?time|part-time)\b',
         r'\b(brigáda|DPP|DPČ|Dohoda o pracovnej činnosti|Dohoda o vykonaní práce|študentská práca)\b',
     ],
     "internship": [
