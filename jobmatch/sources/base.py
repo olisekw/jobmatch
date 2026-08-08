@@ -83,6 +83,12 @@ class JobSource:
     label = "Base"
     needs_browser = False   # True → orchestrator must supply a Playwright page
 
+    # Structured fields this board supplies itself, which therefore beat regex
+    # extraction. `_insert_stub` already prefers a present stub value; declaring
+    # it here lets `jobmatch.reextract` know which stored values it must leave
+    # alone once the two are indistinguishable in the DB.
+    provides = frozenset()
+
     def search(self, page, terms, days, known_ids, ctx):
         """Return job stubs matching any of `terms`, newer than `days`.
 

@@ -17,6 +17,10 @@ python3 app.py                     # → http://127.0.0.1:8000
 
 python3 -m jobmatch.backfill       # idempotent additive-column backfill for live DBs
 python3 -m jobmatch.migrate_csv    # one-time import of legacy data/*.csv (read-only towards CSVs)
+python3 -m jobmatch.reextract      # replay extraction over stored rows after a pattern fix
+                                   #   (dry run; --apply to write, then re-scores)
+
+python3 -m pytest tests/           # or: python3 -m unittest discover -s tests -t .
 ```
 
 Python 3.9+, Flask, SQLite. `data/jobmatch.db` is the single source of truth and is **git-ignored**.
@@ -46,6 +50,9 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
   weights/threshold in Settings re-scores instantly and throws nothing away.
 - **A source's structured fields beat regex extraction** — if a board's API gives `posted_at`,
   `salary_min/max`, `worktype`, `seniority`, carry them through; only fall back to `extract.py`.
+  Each adapter declares these in `JobSource.provides`; keep it in sync with what the adapter
+  actually sets, because once stored the two are indistinguishable and `reextract.py` relies
+  on that declaration to know which columns it must not overwrite.
 - **Adding a board = one file** in `jobmatch/sources/` implementing `search(page, terms, days,
   known_ids, ctx)` (+ `fetch_detail()` if listings lack descriptions) + a registry entry. Set
   `needs_browser = True` only if the site requires Playwright.

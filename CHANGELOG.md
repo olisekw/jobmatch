@@ -12,7 +12,11 @@ each completed roadmap task. The plan lives in `ROADMAP.md`; the rationale in `P
   classifies as hybrid instead of fully remote, and hybrid outranks remote in priority.
   Corpus goes from remote 1354 / hybrid 30 to remote 861 / hybrid 523 — the old split
   was inflating scores, since a remote job also collects a full location score.
-- Landed the test suite (51 tests) and the planning docs; added requirements-dev.txt.
+- Added `python3 -m jobmatch.reextract` — replays extraction over stored rows so a pattern
+  fix reaches jobs already in the DB, then re-scores. Dry run by default. Adapters now
+  declare `JobSource.provides` so board-supplied fields are never overwritten by regex.
+  Applied to the live DB: 978 rows updated, statuses/applications untouched.
+- Landed the test suite (58 tests) and the planning docs; added requirements-dev.txt.
 
 ## 2026-08-04
 - Started this changelog.

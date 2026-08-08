@@ -15,6 +15,7 @@ API_URL = "https://remoteok.com/api"
 class RemoteOkSource(JobSource):
     name = "remoteok"
     label = "Remote OK"
+    provides = frozenset({"worktype"})
 
     def search(self, page, terms, days, known_ids, ctx):
         ctx.progress(f"{self.label}: fetching feed")

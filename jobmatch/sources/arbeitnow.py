@@ -16,6 +16,7 @@ MAX_PAGES = 5
 class ArbeitnowSource(JobSource):
     name = "arbeitnow"
     label = "Arbeitnow"
+    provides = frozenset({"worktype", "employment_type"})
 
     def search(self, page, terms, days, known_ids, ctx):
         cutoff = posted_cutoff(days)

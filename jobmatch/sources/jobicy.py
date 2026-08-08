@@ -22,6 +22,7 @@ def _seniority(level):
 class JobicySource(JobSource):
     name = "jobicy"
     label = "Jobicy"
+    provides = frozenset({"worktype", "seniority", "employment_type"})
 
     def search(self, page, terms, days, known_ids, ctx):
         cutoff = posted_cutoff(days)

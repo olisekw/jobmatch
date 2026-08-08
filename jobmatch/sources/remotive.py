@@ -16,6 +16,7 @@ API_URL = "https://remotive.com/api/remote-jobs?search={term}&limit=100"
 class RemotiveSource(JobSource):
     name = "remotive"
     label = "Remotive"
+    provides = frozenset({"worktype", "employment_type"})
 
     def search(self, page, terms, days, known_ids, ctx):
         cutoff = posted_cutoff(days)
