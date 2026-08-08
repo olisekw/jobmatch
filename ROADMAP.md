@@ -212,3 +212,11 @@ most interesting decision in the codebase and it's genuinely yours.
 `.claude/launch.json` pins `/usr/bin/python3` (3.9.6); Phase 1 onward assumes 3.12. Decide
 whether to bump the local interpreter or hold 3.9 compatibility in the source.
 
+**Resolved 2026-08-08 (half of it):** `/usr/bin/python3` is 3.9.6 (Xcode) and *is* where the
+deps live — `~/Library/Python/3.9/site-packages`, i.e. `pip install --user`. So `launch.json`
+is correct and the app runs. The dev tools were installed the same way. Homebrew has a 3.14 at
+`/opt/homebrew/bin/python3` with **no** project deps, so don't switch `launch.json` to it
+without reinstalling. Still open: whether to move to a venv on 3.12 for Phase 1 (recommended —
+CI targets 3.11/3.12, and pinning a Docker base image in Phase 5 makes the system Python
+irrelevant anyway) or keep the source 3.9-compatible.
+
