@@ -1,16 +1,94 @@
 # JobMatch configuration
-# Code-level constants only. Runtime settings (scoring weights, match threshold,
-# search terms, user preferences) live in the SQLite `settings` table and are
-# edited from the web UI.
+# Code-level constants + deployment settings read from the environment.
+# Runtime settings (scoring weights, match threshold, search terms, user
+# preferences) live in the `settings` table and are edited from the web UI.
+#
+# Every environment variable below is documented in `.env.example`; the
+# defaults are the local-dev ones, so `python3 app.py` needs no env at all.
 
+import os
 from pathlib import Path
 
-# ── Paths ────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "data"
 
-DB_PATH = DATA_DIR / "jobmatch.db"
-RESUME_PDF = DATA_DIR / "cv.pdf"
+# A local `.env` is a convenience, not a requirement: real deployments inject
+# the environment directly, so a missing python-dotenv must not break startup.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+except ImportError:
+    pass
+
+
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+# ── Paths ────────────────────────────────────────────────────
+DATA_DIR = Path(os.environ.get("DATA_DIR") or BASE_DIR / "data")
+RESUME_DIR = DATA_DIR / "resumes"
+# Pre-multi-tenancy CV location; `jobmatch.backfill` moves it into RESUME_DIR.
+LEGACY_RESUME_PDF = DATA_DIR / "cv.pdf"
+
+
+def resume_path(user_id):
+    """Where one user's CV lives. Personal data — one file per user, never shared."""
+    return RESUME_DIR / f"{int(user_id)}.pdf"
+
+
+# Owner of the data on a single-user install, created at startup when the
+# users table is empty. Phase 3 replaces the implicit login with a real one.
+LOCAL_USER_EMAIL = (os.environ.get("LOCAL_USER_EMAIL") or "local@jobmatch.local").lower()
+
+# ── Database ─────────────────────────────────────────────────
+# SQLAlchemy-style URL so Phase 5 can point at Postgres without a rewrite.
+# `sqlite:///rel/path.db` is relative, `sqlite:////abs/path.db` absolute —
+# the same convention SQLAlchemy uses.
+DATABASE_URL = os.environ.get("DATABASE_URL") or f"sqlite:///{DATA_DIR / 'jobmatch.db'}"
+
+SQLITE_URL_PREFIX = "sqlite:///"
+
+
+def sqlite_path(url=None):
+    """Filesystem path behind a sqlite:// URL, or None for any other driver."""
+    url = DATABASE_URL if url is None else url
+    if not url.startswith(SQLITE_URL_PREFIX):
+        return None
+    return Path(url[len(SQLITE_URL_PREFIX):])
+
+
+# Kept as a module constant because `db.get_conn()` and the tests read it
+# directly; it is None once DATABASE_URL points at a non-sqlite backend.
+DB_PATH = sqlite_path()
+
+# ── Deployment ───────────────────────────────────────────────
+# Signs the session cookie. The default is fine locally and refused in
+# production — see `app.check_runtime_config()`.
+DEV_SECRET_KEY = "dev-insecure-do-not-use-in-production"
+SECRET_KEY = os.environ.get("SECRET_KEY") or DEV_SECRET_KEY
+
+DEBUG = _env_bool("JOBMATCH_DEBUG", False)
+HOST = os.environ.get("HOST", "127.0.0.1")
+PORT = _env_int("PORT", 8000)
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+# Scanning is a scraping operation: off means the trigger endpoint refuses
+# rather than silently doing nothing. Phase 4 moves execution to a worker.
+SCAN_ENABLED = _env_bool("SCAN_ENABLED", True)
+
+# Read-only public demo (Phase 6). Declared here so deployment config has one home.
+DEMO_MODE = _env_bool("DEMO_MODE", False)
 
 # ── Web scraping ─────────────────────────────────────────────
 # Politeness delays between requests (seconds)

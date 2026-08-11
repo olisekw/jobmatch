@@ -6,26 +6,27 @@
 <p class="subtitle">Your job search at a glance.</p>
 
 <div class="stat-grid" id="stats">
-  <div class="stat invert"><div class="value" id="st-matched">–</div><div class="label">Matched now</div></div>
-  <div class="stat"><div class="value" id="st-new">–</div><div class="label">Untriaged</div></div>
+  <div class="stat invert"><div class="value" id="st-matched">–</div><div class="label">Worth a look</div></div>
+  <div class="stat"><div class="value" id="st-new">–</div><div class="label">Still to review</div></div>
   <div class="stat"><div class="value" id="st-applied">–</div><div class="label">Applied</div></div>
-  <div class="stat"><div class="value" id="st-total">–</div><div class="label">Jobs in database</div></div>
-  <div class="stat"><div class="value" id="st-unscored">–</div><div class="label">Awaiting analysis</div></div>
+  <div class="stat"><div class="value" id="st-total">–</div><div class="label">Jobs collected</div></div>
+  <div class="stat"><div class="value" id="st-unscored">–</div><div class="label">Not scored yet</div></div>
 </div>
 
 <div class="panel">
   <div style="display:flex; align-items:center; gap:1.5rem; flex-wrap:wrap;">
     <button class="btn big" id="btn-scan">Scan job boards</button>
     <div>
-      <div id="last-scan" class="muted">No scans yet.</div>
+      <div id="last-scan" class="muted">You haven't run a scan yet.</div>
+      <div class="hint" id="scan-problems"></div>
       <div class="hint" id="scan-hint"></div>
     </div>
   </div>
 </div>
 
-<h2>Top matches</h2>
+<h2>Best matches right now</h2>
 <div id="top-jobs"><div class="empty">Loading…</div></div>
-<p class="mt"><a href="/jobs">See all matched jobs →</a></p>
+<p class="mt"><a href="/jobs">See all your matches →</a></p>
 
 {% endblock %}
 {% block scripts %}
@@ -38,15 +39,26 @@ async function loadStats() {
   document.getElementById("st-total").textContent = s.total_jobs;
   document.getElementById("st-unscored").textContent = s.unscored;
   document.getElementById("scan-hint").textContent =
-    `Matched = untriaged jobs scoring ≥ ${s.threshold}% (change in Settings)`;
+    `A job counts as matched once it scores ${Math.round(s.threshold)}% or more `
+    + `and you haven't triaged it yet. Change the bar in Settings.`;
 
-  if (s.last_scan) {
-    const scan = s.last_scan;
-    const when = (scan.finished_at || scan.started_at || "").replace("T", " ");
-    document.getElementById("last-scan").textContent =
-      `Last scan: ${when} UTC — ${scan.status}, ${scan.found} new jobs, ${scan.enriched} analyzed` +
-      (scan.error ? ` (errors: ${scan.error})` : "");
+  const scan = s.last_scan;
+  if (!scan) return;
+
+  const line = document.getElementById("last-scan");
+  if (scan.status === "running") {
+    line.textContent = "Scanning right now…";
+  } else if (scan.status === "done" || scan.status === "cancelled") {
+    line.textContent =
+      `Last scan ${scan.when} · ${plural(scan.found, "new job")}, ${scan.enriched} analyzed`;
+  } else {
+    line.textContent = `Last scan ${scan.when} · ${scan.status_label.toLowerCase()}`;
   }
+  line.title = scan.when_exact;  // the precise timestamp, on hover
+
+  document.getElementById("scan-problems").textContent = scan.problem_sources.length
+    ? `${scan.problem_sources.join(" and ")} didn't respond properly — try again later.`
+    : "";
 }
 
 async function loadTopJobs() {
@@ -54,7 +66,7 @@ async function loadTopJobs() {
   const stats = await api("/api/stats");
   const data = await api(`/api/jobs?status=new&min_score=${stats.threshold}&sort=score`);
   if (!data.jobs.length) {
-    container.innerHTML = '<div class="empty">No matches above the threshold yet. Run a scan or lower the threshold in Settings.</div>';
+    container.innerHTML = '<div class="empty">Nothing clears your match bar yet. Run a scan, or lower the bar in Settings.</div>';
     return;
   }
   container.innerHTML = data.jobs.slice(0, 5).map(j => `

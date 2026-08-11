@@ -4,14 +4,15 @@ One scan at a time, run in a daemon thread owned by this module. The web
 layer starts it with start_scan() and polls current_status().
 """
 
+import json
 import threading
 import traceback
-from datetime import datetime
 
 from playwright.sync_api import sync_playwright
 
 import config
-from . import dates, db, extract, salary, scoring
+
+from . import dates, db, display, extract, salary, scoring
 from .sources import SOURCES, get_enabled
 from .sources.base import ScanContext
 
@@ -20,9 +21,10 @@ _state = None  # current/last ScanState
 
 
 class ScanState:
-    def __init__(self, scan_id):
+    def __init__(self, scan_id, user_id=None):
         self.scan_id = scan_id
-        self.phase = "starting"
+        self.user_id = user_id  # who asked; whose `matched` count gets recorded
+        self.phase = "Starting"
         self.found = 0
         self.enriched = 0
         self.failed = 0
@@ -30,7 +32,9 @@ class ScanState:
         self.status = "running"   # running | done | failed | cancelled
         self.error = None
         self.stop_requested = False
-        self.started_at = datetime.now().isoformat(timespec="seconds")
+        # Naive UTC, to match what `datetime('now')` writes into `scans` — the
+        # dashboard falls back across both fields and must not mix the two.
+        self.started_at = display.utcnow().isoformat(timespec="seconds")
 
     def to_dict(self):
         return {
@@ -59,18 +63,21 @@ def request_stop():
     return False
 
 
-def start_scan():
+def start_scan(user_id=None, trigger="manual"):
     """Start a scan thread. Returns (state dict, error message)."""
     global _state
     with _lock:
         if _state and _state.status == "running":
-            return None, "scan already running"
+            return None, "A scan is already running."
         conn = db.get_conn()
-        cur = conn.execute("INSERT INTO scans DEFAULT VALUES")
+        scan_id = conn.scalar(
+            'INSERT INTO scans ("trigger", requested_by) '
+            "VALUES (:trigger, :user_id) RETURNING id",
+            {"trigger": trigger, "user_id": user_id},
+        )
         conn.commit()
-        scan_id = cur.lastrowid
         conn.close()
-        _state = ScanState(scan_id)
+        _state = ScanState(scan_id, user_id)
         state = _state
 
     thread = threading.Thread(target=_run_scan, args=(state,), daemon=True)
@@ -81,7 +88,10 @@ def start_scan():
 def _run_scan(state):
     conn = db.get_conn()
     try:
-        settings = db.get_all_settings(conn)
+        # The crawl is shared, so it runs off the admin's search settings, not
+        # those of whoever pressed the button. Per-user preferences only ever
+        # affect scoring, never what gets fetched.
+        settings = db.get_all_settings(conn, db.admin_user_id(conn))
         sources = get_enabled(settings["enabled_sources"])
         terms = [t for t in settings["search_terms"] if str(t).strip()]
         days = int(settings["scan_days"]) or None
@@ -116,15 +126,16 @@ def _run_scan(state):
             if not state.stop_requested:
                 _enrich_phase(state, conn, None, ctx)
 
-        state.phase = "scoring"
-        scoring.rescore_all(conn)
+        state.phase = "Scoring matches"
+        # New jobs are new for everyone: materialize and rescore every user.
+        scoring.rescore_all_users(conn)
 
         state.status = "cancelled" if state.stop_requested else "done"
-        state.phase = "finished"
+        state.phase = "Finished"
     except Exception:
         state.status = "failed"
         state.error = traceback.format_exc(limit=3)
-        state.phase = "failed"
+        state.phase = "Failed"
     finally:
         _finalize(state, conn)
         conn.close()
@@ -135,12 +146,12 @@ def _browser_enrich_pending(conn):
     browser_sources = [n for n, s in SOURCES.items() if s.needs_browser]
     if not browser_sources:
         return False
-    marks = ",".join("?" * len(browser_sources))
-    row = conn.execute(
-        f"SELECT COUNT(*) AS n FROM jobs WHERE TRIM(description) = '' AND source IN ({marks})",
-        browser_sources,
-    ).fetchone()
-    return row["n"] > 0
+    binds = {f"s{i}": name for i, name in enumerate(browser_sources)}
+    marks = ",".join(f":{key}" for key in binds)
+    return conn.scalar(
+        f"SELECT COUNT(*) FROM jobs WHERE TRIM(description) = '' AND source IN ({marks})",
+        binds,
+    ) > 0
 
 
 def _insert_stub(conn, source, stub):
@@ -162,18 +173,32 @@ def _insert_stub(conn, source, stub):
     else:
         s_min, s_max, s_cur, s_per = salary.parse_salary(stub.get("salary"))
 
-    cur = conn.execute(
-        """INSERT OR IGNORE INTO jobs
+    # ON CONFLICT DO NOTHING rather than INSERT OR IGNORE: sqlite 3.24+ and
+    # Postgres both speak it, and it only swallows the duplicate-key case
+    # instead of every constraint violation.
+    result = conn.execute(
+        """INSERT INTO jobs
            (source, source_id, title, company, location, salary, freshness, link,
             description, skills, worktype, seniority, employment_type,
             posted_at, salary_min, salary_max, salary_currency, salary_period)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (source.name, stub["source_id"], stub["title"], stub["company"],
-         stub["location"], stub["salary"], stub["freshness"], stub["link"],
-         description, features["skills"], worktype, seniority, employment_type,
-         posted_at, s_min, s_max, s_cur, s_per),
+           VALUES (:source, :source_id, :title, :company, :location, :salary,
+                   :freshness, :link, :description, :skills, :worktype, :seniority,
+                   :employment_type, :posted_at, :salary_min, :salary_max,
+                   :salary_currency, :salary_period)
+           ON CONFLICT (source, source_id) DO NOTHING""",
+        {
+            "source": source.name, "source_id": stub["source_id"],
+            "title": stub["title"], "company": stub["company"],
+            "location": stub["location"], "salary": stub["salary"],
+            "freshness": stub["freshness"], "link": stub["link"],
+            "description": description, "skills": features["skills"],
+            "worktype": worktype, "seniority": seniority,
+            "employment_type": employment_type, "posted_at": posted_at,
+            "salary_min": s_min, "salary_max": s_max,
+            "salary_currency": s_cur, "salary_period": s_per,
+        },
     )
-    return cur.rowcount
+    return result.rowcount
 
 
 def _search_phase(state, conn, page, sources, terms, days, ctx):
@@ -186,10 +211,10 @@ def _search_phase(state, conn, page, sources, terms, days, ctx):
         known_ids = {
             row["source_id"]
             for row in conn.execute(
-                "SELECT source_id FROM jobs WHERE source = ?", (source.name,)
+                "SELECT source_id FROM jobs WHERE source = :source", {"source": source.name}
             )
         }
-        state.phase = f"{source.label}: searching"
+        state.phase = f"Searching {source.label}"
         try:
             stubs = source.search(page, terms, days, known_ids, ctx)
         except Exception as e:
@@ -212,7 +237,9 @@ def _enrich_phase(state, conn, page, ctx):
         source = SOURCES.get(job["source"])
         if source is None or (source.needs_browser and page is None):
             continue
-        state.phase = f"{source.label}: fetching descriptions {i}/{len(pending)}"
+        state.phase = (
+            f"Reading job descriptions on {source.label} ({i} of {len(pending)})"
+        )
 
         description = ""
         for attempt in range(config.MAX_RETRIES):
@@ -228,10 +255,10 @@ def _enrich_phase(state, conn, page, ctx):
         if description:
             features = extract.extract_all(description)
             conn.execute(
-                """UPDATE jobs SET description = ?, skills = ?, worktype = ?,
-                       seniority = ?, employment_type = ? WHERE id = ?""",
-                (description, features["skills"], features["worktype"],
-                 features["seniority"], features["employment_type"], job["id"]),
+                """UPDATE jobs SET description = :description, skills = :skills,
+                       worktype = :worktype, seniority = :seniority,
+                       employment_type = :employment_type WHERE id = :id""",
+                dict(features, description=description, id=job["id"]),
             )
             conn.commit()
             state.enriched += 1
@@ -242,21 +269,28 @@ def _enrich_phase(state, conn, page, ctx):
 
 def _finalize(state, conn):
     try:
-        settings = db.get_all_settings(conn)
-        threshold = float(settings["min_match_score"])
-        matched = conn.execute(
-            "SELECT COUNT(*) AS n FROM jobs WHERE status = 'new' AND match_score >= ?",
-            (threshold,),
-        ).fetchone()["n"]
+        # `scans.matched` is one number for a now per-user quantity, so it
+        # records it for whoever asked for the scan (the admin, for scheduled
+        # runs) — which is exactly the dashboard that will display it.
+        user_id = state.user_id or db.admin_user_id(conn)
+        threshold = float(db.get_all_settings(conn, user_id)["min_match_score"])
+        matched = conn.scalar(
+            "SELECT COUNT(*) FROM user_jobs WHERE user_id = :user_id "
+            "AND status = 'new' AND match_score >= :threshold",
+            {"user_id": user_id, "threshold": threshold},
+        )
         error_text = state.error
         if state.source_errors:
             joined = "; ".join(f"{k}: {v}" for k, v in state.source_errors.items())
             error_text = f"{error_text}; {joined}" if error_text else joined
         conn.execute(
-            """UPDATE scans SET finished_at = datetime('now'), status = ?,
-                   found = ?, enriched = ?, matched = ?, error = ? WHERE id = ?""",
-            (state.status, state.found, state.enriched, matched,
-             error_text, state.scan_id),
+            """UPDATE scans SET finished_at = datetime('now'), status = :status,
+                   found = :found, enriched = :enriched, matched = :matched,
+                   error = :error, source_errors = :source_errors WHERE id = :id""",
+            {"status": state.status, "found": state.found, "enriched": state.enriched,
+             "matched": matched, "error": error_text, "id": state.scan_id,
+             "source_errors": json.dumps(state.source_errors) if state.source_errors
+                              else None},
         )
         conn.commit()
     except Exception:

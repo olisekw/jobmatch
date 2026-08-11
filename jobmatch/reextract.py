@@ -28,6 +28,16 @@ from .sources import SOURCES
 FIELDS = ("skills", "worktype", "seniority", "employment_type")
 
 
+def _status_counts(conn):
+    """Per-user triage counts — the guard that nothing user-owned moved."""
+    return {
+        (row["user_id"], row["status"]): row["n"]
+        for row in conn.execute(
+            "SELECT user_id, status, COUNT(*) AS n FROM user_jobs GROUP BY user_id, status"
+        )
+    }
+
+
 def _recompute(conn):
     """Return (updates, changes) without writing anything.
 
@@ -63,7 +73,7 @@ def _recompute(conn):
             for field in FIELDS:
                 if new[field] != row[field]:
                     changes[field][(row[field], new[field])] += 1
-            updates.append(tuple(new[field] for field in FIELDS) + (row["id"],))
+            updates.append(dict(new, id=row["id"]))
 
     if unknown_sources:
         print(f"  note: unregistered sources left untouched: {dict(unknown_sources)}")
@@ -89,10 +99,7 @@ def main(argv=None):
     apply = "--apply" in argv
 
     conn = db.get_conn()
-    before = {
-        row["status"]: row["n"]
-        for row in conn.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")
-    }
+    before = _status_counts(conn)
 
     updates, changes = _recompute(conn)
     _report(changes)
@@ -103,21 +110,18 @@ def main(argv=None):
         return
 
     conn.executemany(
-        "UPDATE jobs SET skills = ?, worktype = ?, seniority = ?, employment_type = ? "
-        "WHERE id = ?",
+        "UPDATE jobs SET skills = :skills, worktype = :worktype, "
+        "seniority = :seniority, employment_type = :employment_type WHERE id = :id",
         updates,
     )
     conn.commit()
     print(f"\napplied {len(updates)} row updates")
 
-    after = {
-        row["status"]: row["n"]
-        for row in conn.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")
-    }
+    after = _status_counts(conn)
     assert before == after, f"status counts changed! {before} → {after}"
     print(f"status counts unchanged: {after}")
 
-    print(f"rescored {scoring.rescore_all(conn)} jobs")
+    print(f"rescored {scoring.rescore_all_users(conn)} user/job rows")
     conn.close()
 
 

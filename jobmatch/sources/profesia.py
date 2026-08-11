@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 import config
+
 from .base import JobSource, fold
 
 BASE_URL = "https://www.profesia.sk/praca/"
@@ -104,7 +105,7 @@ class ProfesiaSource(JobSource):
         for i, term in enumerate(terms, 1):
             if ctx.stopped():
                 break
-            ctx.progress(f"{self.label}: searching '{term}' ({i}/{len(terms)})")
+            ctx.progress(f"Searching {self.label} for “{term}” ({i} of {len(terms)})")
             stubs.extend(self._search_term(page, term, days, known_ids, ctx))
         return stubs
 
@@ -119,7 +120,7 @@ class ProfesiaSource(JobSource):
         pg = 1
         while not ctx.stopped():
             url = current_url if pg == 1 else f"{current_url}&page_num={pg}"
-            ctx.progress(f"{self.label}: '{term}' page {pg}")
+            ctx.progress(f"Searching {self.label} for “{term}” — page {pg}")
             try:
                 page.goto(url, wait_until="networkidle", timeout=config.TIMEOUT_GOTO)
                 page.wait_for_timeout(1500)

@@ -36,17 +36,20 @@ class ReextractTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _insert(self, source, source_id, **cols):
+        params = dict(cols, source=source, source_id=source_id,
+                      link=f"http://x/{source_id}", description=HYBRID_AD)
         keys = ["source", "source_id", "link", "description"] + list(cols)
-        values = [source, source_id, f"http://x/{source_id}", HYBRID_AD] + list(cols.values())
         self.conn.execute(
-            f"INSERT INTO jobs ({','.join(keys)}) VALUES ({','.join('?' * len(keys))})",
-            values,
+            "INSERT INTO jobs ({}) VALUES ({})".format(
+                ", ".join(keys), ", ".join(f":{k}" for k in keys)),
+            params,
         )
         self.conn.commit()
 
     def _worktype(self, source_id):
         return self.conn.execute(
-            "SELECT worktype FROM jobs WHERE source_id = ?", (source_id,)
+            "SELECT worktype FROM jobs WHERE source_id = :source_id",
+            {"source_id": source_id},
         ).fetchone()["worktype"]
 
     def test_source_provided_worktype_is_not_overwritten(self):
@@ -91,12 +94,40 @@ class ReextractTests(unittest.TestCase):
         self.assertEqual(self._worktype("p4"), "remote")
 
     def test_user_status_is_preserved(self):
-        self._insert("profesia", "p5", worktype="remote", status="declined")
+        # Triage lives in user_jobs now, so this crosses the tenancy boundary:
+        # the shared `jobs` row is rewritten while the user's own row is not.
+        self._insert("profesia", "p5", worktype="remote")
+        user_id = db.create_user(self.conn, "a@example.com")
+        db.ensure_user_jobs(self.conn, user_id)
+        self.conn.execute("UPDATE user_jobs SET status = 'declined'")
+        self.conn.commit()
+
         reextract.main(["--apply"])
-        row = self.conn.execute(
-            "SELECT status, worktype FROM jobs WHERE source_id = 'p5'").fetchone()
-        self.assertEqual(row["status"], "declined")   # user-owned, untouched
-        self.assertEqual(row["worktype"], "hybrid")   # derived, updated
+
+        self.assertEqual(self._worktype("p5"), "hybrid")   # derived, updated
+        status = self.conn.scalar(
+            "SELECT status FROM user_jobs WHERE user_id = :user_id", {"user_id": user_id})
+        self.assertEqual(status, "declined")               # user-owned, untouched
+
+    def test_one_users_triage_does_not_leak_into_another(self):
+        self._insert("profesia", "p6", worktype="remote")
+        first = db.create_user(self.conn, "first@example.com")
+        second = db.create_user(self.conn, "second@example.com")
+        for user_id in (first, second):
+            db.ensure_user_jobs(self.conn, user_id)
+        self.conn.execute(
+            "UPDATE user_jobs SET status = 'applied' WHERE user_id = :user_id",
+            {"user_id": first},
+        )
+        self.conn.commit()
+
+        reextract.main(["--apply"])
+
+        statuses = {
+            row["user_id"]: row["status"]
+            for row in self.conn.execute("SELECT user_id, status FROM user_jobs")
+        }
+        self.assertEqual(statuses, {first: "applied", second: "new"})
 
 
 if __name__ == "__main__":

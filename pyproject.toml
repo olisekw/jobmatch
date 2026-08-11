@@ -1,0 +1,20 @@
+# Tooling config only — JobMatch is run from source, not installed as a package.
+
+[tool.ruff]
+line-length = 100
+# py39, not py311: CI runs 3.11/3.12, but the local interpreter is still the
+# system 3.9 (see the open question in ROADMAP.md). This keeps `UP` from
+# rewriting the source into syntax that machine can't run.
+target-version = "py39"
+exclude = ["data", ".venv"]
+
+[tool.ruff.lint]
+# E/F (pyflakes + pycodestyle), I (import order), B (bugbear), UP (pyupgrade).
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# config.py is a wall of scraping regexes; long literals there are the point.
+"config.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

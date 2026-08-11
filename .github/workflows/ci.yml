@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, saas]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        # The playwright pip package is installed, but no browser is downloaded:
+        # the suite covers scoring/extraction, which never launches one.
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Tests
+        run: pytest -q
+
+      - name: App imports with a production-shaped environment
+        env:
+          SECRET_KEY: ci-only-not-a-real-secret
+          DATA_DIR: ${{ runner.temp }}/jobmatch-data
+          DATABASE_URL: sqlite:///${{ runner.temp }}/jobmatch-data/ci.db
+          SCAN_ENABLED: "false"
+        run: python -c "import wsgi; print(wsgi.app)"

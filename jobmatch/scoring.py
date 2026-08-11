@@ -86,22 +86,44 @@ def score_job(job, prefs, weights):
     return round(100 * weighted / known_weight, 1), components
 
 
-def rescore_all(conn):
-    """Recompute and persist match_score + breakdown for every job."""
-    prefs = db.get_user_prefs(conn)
-    weights = db.get_weights(conn)
+def rescore_user(conn, user_id):
+    """Recompute and persist one user's match_score + breakdown for every job.
+
+    Scores live in `user_jobs`, so two users with different weights read the
+    same shared `jobs` pool through their own row. Missing rows are materialized
+    first — a user who signed up after the last scan has none yet.
+    """
+    db.ensure_user_jobs(conn, user_id)
+    prefs = db.get_user_prefs(conn, user_id)
+    weights = db.get_weights(conn, user_id)
     now = datetime.now().isoformat(timespec="seconds")
 
     updates = []
     for job in conn.execute(
-        "SELECT id, description, skills, worktype, seniority, location FROM jobs"
+        """SELECT j.id, j.description, j.skills, j.worktype, j.seniority, j.location
+           FROM jobs j JOIN user_jobs uj ON uj.job_id = j.id
+           WHERE uj.user_id = :user_id""",
+        {"user_id": user_id},
     ):
         score, breakdown = score_job(job, prefs, weights)
-        updates.append((score, json.dumps(breakdown) if breakdown else None, now, job["id"]))
+        updates.append({
+            "score": score,
+            "breakdown": json.dumps(breakdown) if breakdown else None,
+            "now": now,
+            "user_id": user_id,
+            "job_id": job["id"],
+        })
 
     conn.executemany(
-        "UPDATE jobs SET match_score = ?, score_breakdown = ?, scored_at = ? WHERE id = ?",
+        "UPDATE user_jobs SET match_score = :score, score_breakdown = :breakdown, "
+        "scored_at = :now WHERE user_id = :user_id AND job_id = :job_id",
         updates,
     )
     conn.commit()
     return len(updates)
+
+
+def rescore_all_users(conn):
+    """Rescore every user — what a finished scan triggers. Returns rows written."""
+    user_ids = [row["id"] for row in conn.execute("SELECT id FROM users ORDER BY id")]
+    return sum(rescore_user(conn, user_id) for user_id in user_ids)

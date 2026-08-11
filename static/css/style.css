@@ -164,7 +164,6 @@ label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3
   padding: 0.1rem 0.5rem;
   border: 1px solid var(--gray-2);
   color: var(--gray-4);
-  text-transform: lowercase;
 }
 .tag.match { border-color: var(--ink); color: var(--ink); font-weight: 600; }
 .tag.src { background: var(--gray-1); border-color: var(--gray-1); }
@@ -259,8 +258,8 @@ tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9re
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .scan-box h3 { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
-.scan-box .phase { font-family: var(--mono); font-size: 0.85rem; color: var(--gray-4); margin: 0.8rem 0 0.4rem; min-height: 1.4em; }
-.scan-box .counts { font-family: var(--mono); font-size: 0.8rem; color: var(--gray-4); margin-bottom: 1.6rem; }
+.scan-box .phase { font-size: 0.9rem; color: var(--ink); margin: 0.8rem 0 0.4rem; min-height: 1.4em; }
+.scan-box .counts { font-size: 0.8rem; color: var(--gray-4); margin-bottom: 1.6rem; }
 
 /* ── Toast ───────────────────────────────────────────── */
 #toast {

@@ -9,7 +9,8 @@ async function api(path, options = {}) {
   }
   const res = await fetch(path, options);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  // The server phrases its own errors; anything else was never meant to be read.
+  if (!res.ok) throw new Error(data.error || "Something went wrong — please try again.");
   return data;
 }
 
@@ -32,7 +33,7 @@ const scanOverlay = {
     this.el = document.getElementById("scan-overlay");
     document.getElementById("scan-cancel").addEventListener("click", async () => {
       await api("/api/scan/cancel", { method: "POST" });
-      document.getElementById("scan-phase").textContent = "cancelling…";
+      document.getElementById("scan-phase").textContent = "Stopping…";
     });
     // Reattach if a scan is already running (e.g. after page reload)
     this.poll(true);
@@ -68,10 +69,10 @@ const scanOverlay = {
 
     if (status.status === "running") {
       this.open();
-      document.getElementById("scan-phase").textContent = status.phase || "…";
+      document.getElementById("scan-phase").textContent = status.phase || "Working…";
       document.getElementById("scan-counts").textContent =
-        `found ${status.found} · enriched ${status.enriched}` +
-        (status.failed ? ` · failed ${status.failed}` : "");
+        `${plural(status.found, "new job")} · ${status.enriched} analyzed` +
+        (status.failed ? ` · ${status.failed} could not be read` : "");
       this.schedule();
       return;
     }
@@ -79,15 +80,15 @@ const scanOverlay = {
     if (!initial) {
       this.close();
       if (status.status === "done") {
-        const errors = Object.entries(status.source_errors || {});
+        const boards = Object.keys(status.source_errors || {}).length;
         toast(
-          `Scan finished — ${status.found} new jobs, ${status.enriched} analyzed` +
-          (errors.length ? ` (${errors.map(([s]) => s).join(", ")} had errors)` : "")
+          `Scan finished — ${plural(status.found, "new job")}, ${status.enriched} analyzed` +
+          (boards ? ` (${plural(boards, "board")} had trouble)` : "")
         );
       } else if (status.status === "cancelled") {
-        toast("Scan cancelled");
+        toast("Scan cancelled.");
       } else if (status.status === "failed") {
-        toast("Scan failed — see server log");
+        toast("The scan could not finish. Nothing already saved was lost.");
       }
       if (typeof window.onScanFinished === "function") window.onScanFinished();
     }
@@ -113,43 +114,41 @@ function esc(text) {
   return div.innerHTML;
 }
 
-function postedText(job) {
-  const n = job.posted_days_ago;
-  if (n === null || n === undefined) return job.freshness || "";
-  if (n === 0) return "today";
-  if (n === 1) return "yesterday";
-  return `${n} days ago`;
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 function jobMeta(job) {
   const parts = [
-    job.company || "unknown company",
+    job.company || "company not named",
     job.location || null,
     job.salary || null,
     job.salary_hourly || null,
-    postedText(job) || null,
+    job.posted_display || null,
   ].filter(Boolean);
   return parts.map(esc).join(" · ");
 }
 
 function factTags(job) {
+  // Labels come from the API (jobmatch/display.py) so every page words them
+  // the same way — "Mid-level", never "medior".
   return [
     `<span class="tag src">${esc(job.source_label)}</span>`,
-    job.seniority ? `<span class="tag fact">${esc(job.seniority)}</span>` : "",
-    job.worktype ? `<span class="tag fact">${esc(job.worktype)}</span>` : "",
-    job.employment_type ? `<span class="tag fact">${esc(job.employment_type)}</span>` : "",
+    job.seniority_label ? `<span class="tag fact">${esc(job.seniority_label)}</span>` : "",
+    job.worktype_label ? `<span class="tag fact">${esc(job.worktype_label)}</span>` : "",
+    job.employment_label ? `<span class="tag fact">${esc(job.employment_label)}</span>` : "",
   ].join("");
 }
 
 function breakdownTitle(bd) {
-  if (!bd) return "not scored yet — run a scan to fetch the description";
+  if (!bd) return "Not scored yet — the next scan will fetch the description.";
   const part = (name, value) =>
-    `${name}: ${value === null ? "unknown" : Math.round(value * 100) + "%"}`;
-  return [
-    part("skills", bd.skills),
-    part("worktype", bd.worktype),
-    part("location", bd.location),
-    part("seniority", bd.seniority),
+    `${name} ${value === null ? "not known" : Math.round(value * 100) + "%"}`;
+  return "How this score is made up:\n" + [
+    part("Skills", bd.skills),
+    part("Worktype", bd.worktype),
+    part("Location", bd.location),
+    part("Seniority", bd.seniority),
   ].join("\n");
 }
 

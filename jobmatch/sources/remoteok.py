@@ -7,7 +7,13 @@ legal-notice stub). Salaries are yearly USD numbers; dates are epoch/ISO.
 import datetime
 import json
 
-from .base import JobSource, http_get, match_terms, normalize_employment_type, posted_cutoff, strip_html
+from .base import (
+    JobSource,
+    http_get,
+    match_terms,
+    posted_cutoff,
+    strip_html,
+)
 
 API_URL = "https://remoteok.com/api"
 
@@ -18,7 +24,7 @@ class RemoteOkSource(JobSource):
     provides = frozenset({"worktype"})
 
     def search(self, page, terms, days, known_ids, ctx):
-        ctx.progress(f"{self.label}: fetching feed")
+        ctx.progress(f"Reading the {self.label} feed")
         items = json.loads(http_get(API_URL))
         cutoff = posted_cutoff(days)
         stubs = []
@@ -47,7 +53,9 @@ class RemoteOkSource(JobSource):
             salary_max = float(item["salary_max"]) if item.get("salary_max") else None
             salary_text = None
             if salary_min or salary_max:
-                salary_text = f"{int(salary_min or salary_max):,} – {int(salary_max or salary_min):,} usd/year".replace(",", " ")
+                low = int(salary_min or salary_max)
+                high = int(salary_max or salary_min)
+                salary_text = f"{low:,} – {high:,} usd/year".replace(",", " ")
 
             description = strip_html(item.get("description"))
             known_ids.add(source_id)

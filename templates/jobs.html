@@ -3,20 +3,20 @@
 {% block content %}
 
 <h1>Jobs</h1>
-<p class="subtitle">Every scraped offer, scored against your profile.</p>
+<p class="subtitle">Every offer found so far, scored against your profile.</p>
 
 <div class="filters">
   <div class="field">
     <span>Status</span>
     <div class="tabs" id="status-tabs">
-      <button data-status="new" class="active">Matched</button>
-      <button data-status="new-all">All new</button>
+      <button data-status="new" class="active">Matches</button>
+      <button data-status="new-all">Everything new</button>
       <button data-status="applied">Applied</button>
       <button data-status="declined">Declined</button>
     </div>
   </div>
   <div class="field">
-    <span>Min score <span class="hint">(matched view)</span></span>
+    <span>Min score <span class="hint">(matches only)</span></span>
     <div class="range-wrap">
       <input type="range" id="f-score" min="0" max="100" step="5" value="20">
       <output id="f-score-out">20%</output>
@@ -86,10 +86,10 @@ async function loadJobs() {
   const data = await api(`/api/jobs?${params}`);
   const list = document.getElementById("job-list");
   document.getElementById("count-note").textContent =
-    `${data.count} job${data.count === 1 ? "" : "s"}${data.count === 500 ? " (showing first 500)" : ""}`;
+    plural(data.count, "job") + (data.truncated ? ", showing the best ones first" : "");
 
   if (!data.jobs.length) {
-    list.innerHTML = '<div class="empty">Nothing here. Try lowering the score filter or run a scan.</div>';
+    list.innerHTML = '<div class="empty">Nothing here yet. Try lowering the minimum score, or run a scan.</div>';
     return;
   }
 
@@ -98,7 +98,7 @@ async function loadJobs() {
       <div class="score ${scoreClass(j.match_score)}" title="${esc(breakdownTitle(j.score_breakdown))}">${scoreText(j.match_score)}</div>
       <div>
         <a class="title" href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.title)}</a>
-        <div class="meta" title="${j.posted_at ? "posted " + esc(j.posted_at) : ""}">${jobMeta(j)}</div>
+        <div class="meta" title="${j.posted_exact ? "Posted " + esc(j.posted_exact) : ""}">${jobMeta(j)}</div>
         <div class="tags">
           ${factTags(j)}
           ${(j.skills || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 8)
@@ -116,7 +116,7 @@ document.getElementById("job-list").addEventListener("click", async (e) => {
   btn.disabled = true;
   try {
     await api(`/api/jobs/${jobId}/status`, { json: { status: btn.dataset.act } });
-    toast(btn.dataset.act === "applied" ? "Added to tracker" : "Updated");
+    toast(btn.dataset.act === "applied" ? "Added to your tracker." : "Updated.");
     await loadJobs();
   } catch (err) {
     toast(err.message);

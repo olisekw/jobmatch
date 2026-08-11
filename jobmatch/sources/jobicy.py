@@ -7,7 +7,14 @@ seniority directly, pubDate is "YYYY-MM-DD HH:MM:SS".
 import json
 from urllib.parse import quote
 
-from .base import JobSource, http_get, match_terms, normalize_employment_type, posted_cutoff, strip_html
+from .base import (
+    JobSource,
+    http_get,
+    match_terms,
+    normalize_employment_type,
+    posted_cutoff,
+    strip_html,
+)
 
 API_URL = "https://jobicy.com/api/v2/remote-jobs?count=50&tag={term}"
 
@@ -31,7 +38,7 @@ class JobicySource(JobSource):
         for i, term in enumerate(terms, 1):
             if ctx.stopped():
                 break
-            ctx.progress(f"{self.label}: searching '{term}' ({i}/{len(terms)})")
+            ctx.progress(f"Searching {self.label} for “{term}” ({i} of {len(terms)})")
             try:
                 data = json.loads(http_get(API_URL.format(term=quote(term))))
             except Exception:

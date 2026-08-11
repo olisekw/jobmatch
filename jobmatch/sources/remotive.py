@@ -8,7 +8,14 @@ import json
 from urllib.parse import quote
 
 from .. import salary as salary_mod
-from .base import JobSource, http_get, match_terms, normalize_employment_type, posted_cutoff, strip_html
+from .base import (
+    JobSource,
+    http_get,
+    match_terms,
+    normalize_employment_type,
+    posted_cutoff,
+    strip_html,
+)
 
 API_URL = "https://remotive.com/api/remote-jobs?search={term}&limit=100"
 
@@ -25,7 +32,7 @@ class RemotiveSource(JobSource):
         for i, term in enumerate(terms, 1):
             if ctx.stopped():
                 break
-            ctx.progress(f"{self.label}: searching '{term}' ({i}/{len(terms)})")
+            ctx.progress(f"Searching {self.label} for “{term}” ({i} of {len(terms)})")
             try:
                 data = json.loads(http_get(API_URL.format(term=quote(term))))
             except Exception:
@@ -52,7 +59,9 @@ class RemotiveSource(JobSource):
                     "source_id": source_id,
                     "title": title.lower(),
                     "company": (item.get("company_name") or "").strip().lower() or None,
-                    "location": (item.get("candidate_required_location") or "").strip().lower() or "remote",
+                    "location": (
+                        (item.get("candidate_required_location") or "").strip().lower() or "remote"
+                    ),
                     "salary": salary_text,
                     "freshness": None,
                     "link": item.get("url"),

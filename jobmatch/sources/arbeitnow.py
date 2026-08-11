@@ -7,7 +7,14 @@ created_at is epoch). Only remote-flagged jobs are kept, per user decision.
 import datetime
 import json
 
-from .base import JobSource, http_get, match_terms, normalize_employment_type, posted_cutoff, strip_html
+from .base import (
+    JobSource,
+    http_get,
+    match_terms,
+    normalize_employment_type,
+    posted_cutoff,
+    strip_html,
+)
 
 API_URL = "https://www.arbeitnow.com/api/job-board-api?page={page}"
 MAX_PAGES = 5
@@ -25,7 +32,7 @@ class ArbeitnowSource(JobSource):
         for pg in range(1, MAX_PAGES + 1):
             if ctx.stopped():
                 break
-            ctx.progress(f"{self.label}: feed page {pg}")
+            ctx.progress(f"Reading the {self.label} feed — page {pg}")
             data = json.loads(http_get(API_URL.format(page=pg)))
             items = data.get("data", [])
             if not items:

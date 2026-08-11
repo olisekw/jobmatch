@@ -1,25 +1,3 @@
-<!-- Synthesized from PROJECT.md (maintain-folders pass, 2026-08-04). Edit freely — this is the plan; IDEA.md is your original idea. -->
-
-# ROADMAP.md — JobMatch
-
-Local single-user job scanner + scorer + application tracker. Status snapshot: 2026-08-04.
-
-## Done
-- Flask app with 4 pages (Dashboard, Jobs, Tracker, Settings) + JSON API.
-- 6 working source adapters (`profesia`, `kariera`, `remoteok`, `remotive`, `jobicy`, `arbeitnow`) behind one `JobSource` interface.
-- Background scan with live progress/cancel, scoring engine (re-scores instantly on weight change), regex skill/worktype/seniority extraction, salary/date parsing, PDF resume parsing, application tracking with status pipeline + event history.
-- Live populated SQLite DB (~9.7MB) — actually used, not just scaffolded. Runtime settings live in the DB, editable from the UI.
-
-## Next
-- Add a test suite for scoring + extraction correctness (none exists today — relies on manual verification).
-- Harden the `profesia` Playwright adapter (heaviest dependency; most likely to break silently on markup change).
-
-## Later
-- Additive new boards (new adapter file + registry entry).
-- Revisit the deliberate "no FX conversion" choice if cross-currency comparison becomes annoying.
-
-## Open questions
-- Confirm the `.claude/launch.json` interpreter (`/usr/bin/python3`) matches where `requirements.txt` is installed.
 <!-- The plan. Rationale lives in PROJECT.md; the original idea in IDEA.md; shipped work in CHANGELOG.md. -->
 
 # ROADMAP.md — JobMatch
@@ -51,40 +29,50 @@ from that point on; everything after is improvement, not a blocker.
   change); regex skill/worktype/seniority extraction; salary + date parsing; PDF resume
   parsing; application tracking with status pipeline and event history.
 - Live, populated SQLite DB — actually used, not scaffolded. Runtime settings in the DB.
-- Test suite for scoring + extraction (`tests/`, 349 lines) — **written but not yet committed.**
+- Test suite for scoring + extraction (59 tests) — committed.
+- `jobmatch.reextract`: replays extraction over stored rows after a pattern fix (not
+  originally planned; the Slovak extraction bugs made it necessary).
+- Multi-tenant schema on SQLAlchemy Core, with the live DB migrated and verified (Phase 2).
 
 ---
 
-## Phase 0 — Land what already exists
+## Phase 0 — Land what already exists ✅ (2026-08-08)
 
 No new code; untracked work that makes the repo look finished.
 
-- Commit `tests/` (the previous roadmap still listed "add a test suite" as next — it's done).
-- Commit `PROJECT.md`, `CHANGELOG.md`, this `ROADMAP.md`.
-- Fill in the empty `IDEA.md` — one honest paragraph, in your own words, on the original
-  itch. It reads well in a README later.
-- Add `requirements-dev.txt` (`pytest`, `pytest-cov`, `ruff`).
-- Branch first (`git checkout -b saas`) — never commit to `main`.
+- ~~Commit `tests/`, `PROJECT.md`, `CHANGELOG.md`, this `ROADMAP.md`.~~
+- ~~Add `requirements-dev.txt` (`pytest`, `pytest-cov`, `ruff`).~~
+- ~~Branch first (`git checkout -b saas`).~~
+- **Still open:** fill in the empty `IDEA.md` — one honest paragraph, in your own words, on
+  the original itch. Nobody else can write this one; it reads well in a README later.
 
-## Phase 1 — Configuration and CI
+## Phase 1 — Configuration and CI ✅ (2026-08-08)
 
 Nothing about hosting works until the app reads its environment.
 
-- `config.py`: `DATABASE_URL`, `SECRET_KEY`, `DATA_DIR`, `DEMO_MODE`, `LOG_LEVEL`,
-  `SCAN_ENABLED` from `os.environ`, with local-dev defaults. Regex/delay constants stay
-  exactly where they are — the file's stated scope still holds.
-- `app.py`: drop the hardcoded `debug=True` / `host="127.0.0.1"`; gate debug behind an env
-  flag. Add a `wsgi.py` gunicorn entrypoint alongside the `__main__` dev runner.
-- `.env.example` (`.gitignore` already covers `.env`).
-- `.github/workflows/ci.yml`: `pytest` on 3.11/3.12 + `ruff check`.
+- ~~`config.py`: `DATABASE_URL`, `SECRET_KEY`, `DATA_DIR`, `DEMO_MODE`, `LOG_LEVEL`,
+  `SCAN_ENABLED` from `os.environ`, with local-dev defaults.~~ Regex/delay constants stayed
+  put. `config.sqlite_path()` derives `DB_PATH` from the URL, so the Phase 2 driver swap
+  has one place to change.
+- ~~`app.py`: dropped the hardcoded `debug=True` / `host="127.0.0.1"`; added `wsgi.py`.~~
+  Startup bootstrap (schema + orphaned-scan reconciliation) is now `app.bootstrap_db()`,
+  shared by both entrypoints; `check_runtime_config()` refuses the dev `SECRET_KEY` or
+  debug mode on a non-loopback bind. `POST /api/scan/start` returns 503 when
+  `SCAN_ENABLED` is off.
+- ~~`.env.example`~~, plus `python-dotenv` + `gunicorn` in `requirements.txt`.
+- ~~`.github/workflows/ci.yml`: `pytest` on 3.11/3.12 + `ruff check`~~, and a smoke step
+  importing `wsgi` under a production-shaped environment. Added `pyproject.toml` with the
+  ruff/pytest config and fixed the 15 findings of the first clean run.
 
-## Phase 2 — Multi-tenant data model
+## Phase 2 — Multi-tenant data model ✅ (2026-08-10)
 
 The largest phase. Do the schema change and the DB-driver change **together, once**.
 
-**Swap `sqlite3` for SQLAlchemy Core** (not the ORM — the existing SQL is good and readable)
-in `jobmatch/db.py`, driven by `DATABASE_URL`. Dev stays on SQLite; this makes the Phase 5
-Postgres switch a URL change plus a few dialect fixes instead of a second rewrite.
+~~**Swap `sqlite3` for SQLAlchemy Core**~~ — done, Core only: tables are declared as `Table`
+objects so DDL is dialect-correct and `create_all` idempotent, while every *query* stays
+plain `text()` SQL. The one real cost was paramstyle: `?` is a DBAPI detail psycopg2 does
+not speak, so all queries moved to named `:binds`. New ids come back via `INSERT … RETURNING
+id` rather than `lastrowid`, which `text()` cannot reach and Postgres does not have.
 
 | Table | Change |
 |---|---|
@@ -95,19 +83,32 @@ Postgres switch a URL change plus a few dialect fixes instead of a second rewrit
 | `applications`, `application_events` | add `user_id`; `applications.job_id` unique becomes unique **per user** |
 | `scans` | add `trigger` (schedule/manual), `requested_by` |
 
-- `scoring.rescore_all(conn)` → `rescore_user(conn, user_id)`, writing into `user_jobs`.
-  The formula and the **"score over *known* components only"** invariant are untouched —
-  it survives multi-tenancy intact, and `tests/test_scoring.py` should pass with only
-  signature changes.
-- Materialize `user_jobs` lazily: on signup and after each scan, one `INSERT … SELECT`
-  creates missing rows, then rescore. At ~10k jobs × a few users this is trivial, and it
-  keeps score filtering/sorting in SQL so the `/api/jobs` query shape survives.
-- CVs move from the single `config.RESUME_PDF` to `data/resumes/<user_id>.pdf`;
-  `jobmatch/resume.py` is unchanged, only its caller.
-- Extend `jobmatch/backfill.py` with a one-time migration creating user #1 from the existing
-  local DB and reassigning all current statuses/applications to it — keeping the "additive,
-  idempotent, never touch a user's data" rule.
-- Every route in `app.py` gains a user scope; `get_db()` gets a `current_user()` companion.
+- ~~`scoring.rescore_all(conn)` → `rescore_user(conn, user_id)`, writing into `user_jobs`.~~
+  Plus `rescore_all_users()`. The formula and the **"score over *known* components only"**
+  invariant were untouched, and `tests/test_scoring.py` needed **no** changes at all —
+  it tests `score_job` on dicts, which never learned about tenancy.
+- ~~Materialize `user_jobs` lazily~~ — `db.ensure_user_jobs()`, one `INSERT … SELECT`, called
+  after each scan. Score filtering/sorting stayed in SQL, so the `/api/jobs` query shape
+  survived as intended.
+- ~~CVs move to `data/resumes/<user_id>.pdf`~~ via `config.resume_path()`; `resume.py`
+  unchanged, as predicted.
+- ~~Extend `jobmatch/backfill.py` with a one-time migration~~ — `migrate_multiuser()`, which
+  detects that it has already run and no-ops. SQLite cannot drop a column named in a CHECK
+  constraint or widen a UNIQUE constraint in place, so `jobs`, `applications` and
+  `application_events` go through the documented create/copy/drop/rename rebuild, wrapped in
+  one transaction with `PRAGMA foreign_key_check` before commit.
+- ~~Every route in `app.py` gains a user scope~~ — `current_user_id()` alongside `get_db()`,
+  resolving to the single local user until Phase 3 puts a real login in front of it.
+
+**Verified against a copy of the live 2375-job DB** (see checkpoints below) — this is what
+the checkpoint was for, and it caught two bugs that unit tests could not have:
+
+1. `INSERT … SELECT … ON CONFLICT` does not parse in SQLite — after a SELECT the parser
+   cannot tell an upsert's `ON` from a join's, and needs a `WHERE true` to disambiguate.
+   Only the two statements in `backfill.py` were affected; every other upsert uses `VALUES`.
+2. `Table.to_metadata(MetaData())` cannot resolve `ForeignKey("users.id")` into an empty
+   MetaData, so the rebuild of `applications` would not compile. The FK targets are now
+   copied alongside it as scaffolding. `jobs` had hidden this — it has no foreign keys.
 
 ## Phase 3 — Auth and security
 
@@ -196,9 +197,16 @@ most interesting decision in the codebase and it's genuinely yours.
 
 ## Verification checkpoints
 
-- **Phase 2 is the risky one.** Copy the live `data/jobmatch.db` aside first; run the
-  backfill against the copy and confirm every application, status and event survives as
-  `user_id = 1`.
+- ~~**Phase 2 is the risky one.**~~ **Done 2026-08-10.** Ran against a `.backup()` copy of the
+  live DB under `DATA_DIR=<scratch>` (which isolates the CV move too — `move_resume` renames
+  the real `data/cv.pdf` otherwise). All 2375 rows kept their status *and* score **per row**,
+  not merely in aggregate: 52 declined / 2323 new, score sum 37011.5, all 15 settings keys
+  carried into `user_settings`, every `user_jobs` row owned by `user_id = 1`. Re-running twice
+  more changed nothing. Then the app booted against the migrated DB and all four pages plus
+  the JSON API returned 200.
+  **Caveat:** the live DB has **0 applications and 0 events**, so the application/event half
+  of this checkpoint is only covered by `_rebuild`'s `defaults={"user_id": …}` path and the
+  unit tests — not by real data. Worth re-checking once the tracker has rows in it.
 - **Phase 3:** two users, two browsers — each sees only their own tracker, and changing user
   A's weights doesn't move user B's scores.
 - **Phase 4:** kill the worker mid-scan, restart, confirm the orphaned row is reconciled and
@@ -216,7 +224,18 @@ whether to bump the local interpreter or hold 3.9 compatibility in the source.
 deps live — `~/Library/Python/3.9/site-packages`, i.e. `pip install --user`. So `launch.json`
 is correct and the app runs. The dev tools were installed the same way. Homebrew has a 3.14 at
 `/opt/homebrew/bin/python3` with **no** project deps, so don't switch `launch.json` to it
-without reinstalling. Still open: whether to move to a venv on 3.12 for Phase 1 (recommended —
-CI targets 3.11/3.12, and pinning a Docker base image in Phase 5 makes the system Python
-irrelevant anyway) or keep the source 3.9-compatible.
+without reinstalling. Still open: whether to move to a venv on 3.12 (recommended — CI targets
+3.11/3.12, and pinning a Docker base image in Phase 5 makes the system Python irrelevant
+anyway) or keep the source 3.9-compatible.
+
+**Phase 1 held both:** CI runs 3.11/3.12 while `pyproject.toml` pins ruff's `target-version`
+to `py39`, so lint never rewrites the source past what the local interpreter runs. That costs
+nothing today and stops being a question the moment there's a venv or a Docker base image —
+but decide before Phase 2, because SQLAlchemy is the point where the split gets expensive.
+
+**Closed 2026-08-10 — the split never got expensive.** Phase 2 went in on 3.9.6 with
+SQLAlchemy 2.0.51 (installed `--user`) and the suite is green on it; nothing in Core needed
+3.10+ syntax. So the answer is "keep holding both, and let Phase 5 end it": the Docker base
+image pins the real runtime, at which point the system Python stops mattering and the `py39`
+ruff target can be raised in the same commit. No venv needed in between.
 

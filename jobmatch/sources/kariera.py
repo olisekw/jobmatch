@@ -101,7 +101,7 @@ class KarieraSource(JobSource):
         for i, term in enumerate(terms, 1):
             if ctx.stopped():
                 break
-            ctx.progress(f"{self.label}: searching '{term}' ({i}/{len(terms)})")
+            ctx.progress(f"Searching {self.label} for “{term}” ({i} of {len(terms)})")
             stubs.extend(self._search_term(term, days, known_ids, ctx))
         return stubs
 
@@ -112,7 +112,7 @@ class KarieraSource(JobSource):
         for pg in range(MAX_PAGES):
             if ctx.stopped():
                 break
-            ctx.progress(f"{self.label}: '{term}' page {pg + 1}")
+            ctx.progress(f"Searching {self.label} for “{term}” — page {pg + 1}")
             html = http_get(_search_url(term, days, pg * PER_PAGE))
             page_stubs, matched = parse_offers(html, term_lower, known_ids)
             stubs.extend(page_stubs)

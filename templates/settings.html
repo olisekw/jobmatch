@@ -3,13 +3,13 @@
 {% block content %}
 
 <h1>Settings</h1>
-<p class="subtitle">Your profile, matching rules and scan configuration.</p>
+<p class="subtitle">Your profile, what counts as a good match, and where to look.</p>
 
 <h2>Resume</h2>
 <div class="panel">
   <div class="dropzone" id="dropzone">
     <strong>Drop your CV here</strong> or click to choose a PDF.<br>
-    <span class="hint" id="resume-state">Skills are extracted automatically and merged into your profile.</span>
+    <span class="hint" id="resume-state">Your skills are picked out of it and added to your profile.</span>
   </div>
   <input type="file" id="resume-file" accept=".pdf" style="display:none">
 </div>
@@ -23,21 +23,11 @@
     </div>
     <div>
       <label>Seniority</label>
-      <select id="s-seniority">
-        <option value="">— not set —</option>
-        <option value="junior">Junior</option>
-        <option value="medior">Medior</option>
-        <option value="senior">Senior</option>
-      </select>
+      <select id="s-seniority"></select>
     </div>
     <div>
       <label>Preferred worktype</label>
-      <select id="s-worktype">
-        <option value="">— not set —</option>
-        <option value="remote">Remote</option>
-        <option value="hybrid">Hybrid</option>
-        <option value="onsite">Onsite</option>
-      </select>
+      <select id="s-worktype"></select>
     </div>
   </div>
   <div class="mt">
@@ -51,10 +41,10 @@
 <div class="panel">
   <label>Minimum match score: <output id="s-threshold-out" class="mono"></output></label>
   <input type="range" id="s-threshold" min="0" max="100" step="5">
-  <p class="hint">Jobs scoring below this stay in "All new" but out of your matched list. Takes effect instantly — no re-scan needed.</p>
+  <p class="hint">Jobs below this still show under "Everything new" — they just don't count as matches. Takes effect straight away, no re-scan needed.</p>
 
   <div class="mt">
-    <label>Score weights <span class="hint">normalized to 100% on save</span></label>
+    <label>What matters most <span class="hint">these are relative; they get balanced out when you save</span></label>
     <div class="weight-row"><span>Skills</span><input type="range" id="w-skill" min="0" max="100" step="5"><span class="val" id="w-skill-out"></span></div>
     <div class="weight-row"><span>Worktype</span><input type="range" id="w-worktype" min="0" max="100" step="5"><span class="val" id="w-worktype-out"></span></div>
     <div class="weight-row"><span>Location</span><input type="range" id="w-location" min="0" max="100" step="5"><span class="val" id="w-location-out"></span></div>
@@ -63,7 +53,7 @@
 
   <div class="check-row">
     <input type="checkbox" id="s-strict">
-    <label for="s-strict" style="margin:0">Strict seniority — a job with a different seniority scores 0</label>
+    <label for="s-strict" style="margin:0">Strict seniority — a job at a different level scores zero</label>
   </div>
   <button class="btn mt" id="save-matching">Save matching rules</button>
 </div>
@@ -74,13 +64,13 @@
   <div class="chip-row" id="profile-chips"></div>
 
   <div class="mt">
-    <label>Search terms <span class="hint">one per line or comma-separated; each term is searched on every enabled board</span></label>
+    <label>Search terms <span class="hint">one per line or comma-separated; each one is searched on every board below</span></label>
     <textarea id="s-terms" rows="4"></textarea>
   </div>
 
   <div class="settings-grid mt">
     <div>
-      <label>Only jobs from the last <span class="hint">days (0 = full scan)</span></label>
+      <label>Only jobs from the last <span class="hint">days — 0 looks all the way back</span></label>
       <input type="number" id="s-days" min="0" max="90" style="width:110px">
     </div>
     <div>
@@ -104,12 +94,21 @@ function bindRange(id, value, format) {
   input.addEventListener("input", () => out.textContent = format(input.value));
 }
 
+function fillSelect(id, choices, current) {
+  document.getElementById(id).innerHTML =
+    `<option value="">No preference</option>` + choices.map(c =>
+      `<option value="${esc(c.value)}" ${c.value === current ? "selected" : ""}>${esc(c.label)}</option>`
+    ).join("");
+}
+
 async function init() {
   settings = await api("/api/settings");
 
   document.getElementById("s-location").value = settings.user_location || "";
-  document.getElementById("s-seniority").value = settings.user_seniority || "";
-  document.getElementById("s-worktype").value = settings.user_worktype || "";
+  // Both lists are worded by the server, so "Mid-level" here and on a job card
+  // are always the same word.
+  fillSelect("s-seniority", settings.seniority_options, settings.user_seniority);
+  fillSelect("s-worktype", settings.worktype_options, settings.user_worktype);
   document.getElementById("s-skills").value = (settings.user_skills || []).join(", ");
 
   bindRange("s-threshold", settings.min_match_score, v => `${v}%`);
@@ -124,7 +123,7 @@ async function init() {
 
   document.getElementById("profile-chips").innerHTML =
     Object.keys(settings.search_profiles).map(name =>
-      `<button class="chip ${name === settings.active_profile ? "active" : ""}" data-profile="${esc(name)}">${esc(name)}</button>`
+      `<button class="chip ${name === settings.active_profile ? "active" : ""}" data-profile="${esc(name)}">${esc(settings.profile_labels[name] || name)}</button>`
     ).join("");
 
   document.getElementById("source-checks").innerHTML =
@@ -137,14 +136,15 @@ async function init() {
 
   if (settings.resume_text) {
     document.getElementById("resume-state").textContent =
-      `Current CV: ${settings.resume_text.length} characters extracted. Upload a new PDF to replace it.`;
+      `Your CV is loaded — ${plural((settings.user_skills || []).length, "skill")} in your profile. `
+      + `Drop a new PDF here to replace it.`;
   }
 }
 
 async function save(payload, message) {
   try {
     const res = await api("/api/settings", { method: "PUT", json: payload });
-    toast(message + (res.rescored ? " — all jobs rescored" : ""));
+    toast(message + (res.rescored ? " Every job was rescored." : ""));
     settings = await api("/api/settings");
   } catch (err) {
     toast(err.message);
@@ -156,7 +156,7 @@ document.getElementById("save-profile").addEventListener("click", () => save({
   user_seniority: document.getElementById("s-seniority").value,
   user_worktype: document.getElementById("s-worktype").value,
   user_skills: document.getElementById("s-skills").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
-}, "Profile saved"));
+}, "Profile saved."));
 
 document.getElementById("save-matching").addEventListener("click", () => save({
   min_match_score: Number(document.getElementById("s-threshold").value),
@@ -165,14 +165,14 @@ document.getElementById("save-matching").addEventListener("click", () => save({
   weight_location: Number(document.getElementById("w-location").value) / 100,
   weight_seniority: Number(document.getElementById("w-seniority").value) / 100,
   seniority_strict: document.getElementById("s-strict").checked,
-}, "Matching rules saved"));
+}, "Matching rules saved."));
 
 document.getElementById("save-scan").addEventListener("click", () => save({
   search_terms: document.getElementById("s-terms").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
   scan_days: Number(document.getElementById("s-days").value) || 0,
   enabled_sources: [...document.querySelectorAll("#source-checks input:checked")].map(c => c.value),
   active_profile: document.querySelector("#profile-chips .chip.active")?.dataset.profile || "custom",
-}, "Scan settings saved"));
+}, "Scan settings saved."));
 
 document.getElementById("profile-chips").addEventListener("click", (e) => {
   const chip = e.target.closest(".chip");
@@ -200,17 +200,18 @@ fileInput.addEventListener("change", () => {
 
 async function uploadResume(file) {
   const stateEl = document.getElementById("resume-state");
-  stateEl.textContent = "Uploading and analyzing…";
+  stateEl.textContent = "Reading your CV…";
   const form = new FormData();
   form.append("resume", file);
   try {
     const res = await api("/api/resume", { method: "POST", body: form });
-    stateEl.textContent =
-      `Done — ${res.characters} characters read, skills detected: ${res.detected_skills.join(", ") || "none"}.`;
+    stateEl.textContent = res.detected_skills.length
+      ? `Read your CV and picked up ${res.detected_skills.join(", ")}.`
+      : "Read your CV, but no familiar skills stood out — add them by hand below.";
     document.getElementById("s-skills").value = res.user_skills.join(", ");
-    toast("Resume updated — all jobs rescored");
+    toast("CV updated — every job rescored against it.");
   } catch (err) {
-    stateEl.textContent = "Upload failed.";
+    stateEl.textContent = "That upload didn't work. Try again, or pick another PDF.";
     toast(err.message);
   }
 }
