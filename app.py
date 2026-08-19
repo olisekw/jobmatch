@@ -6,12 +6,33 @@ Prod: gunicorn wsgi:app         (see wsgi.py)
 
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 
-from flask import Flask, g, jsonify, render_template, request, session
+from flask import (
+    Flask,
+    flash,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_login import (
+    LoginManager,
+    current_user,
+    login_required,
+    login_user,
+    logout_user,
+)
+from flask_wtf.csrf import CSRFError, CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
-from jobmatch import dates, db, display, resume, salary, scan, scoring
+from jobmatch import auth, dates, db, display, resume, salary, scan, scoring, worker
 from jobmatch.sources import SOURCES
 
 logging.basicConfig(
@@ -21,11 +42,30 @@ logging.basicConfig(
 log = logging.getLogger("jobmatch")
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
-app.config["SECRET_KEY"] = config.SECRET_KEY
+app.config.update(
+    SECRET_KEY=config.SECRET_KEY,
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+    # Session cookie policy. Lax still sends the cookie on a top-level GET, so
+    # a bookmarked /jobs works, while a cross-site POST arrives without it.
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=config.SESSION_COOKIE_SECURE,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=config.SESSION_DAYS),
+    RATELIMIT_STORAGE_URI=config.RATELIMIT_STORAGE_URI,
+    RATELIMIT_ENABLED=config.RATELIMIT_ENABLED,
+)
 
+# Every mutating route is covered by default — this app has no endpoint that
+# wants to be POSTed to from elsewhere, so exemptions are opt-in and rare.
+csrf = CSRFProtect(app)
 
-LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+limiter = Limiter(get_remote_address, app=app)
+
+login_manager = LoginManager(app)
+login_manager.login_view = "page_login"
+# "strong" also pins the session to the user agent + IP hash, so a stolen
+# cookie replayed from elsewhere is logged out rather than accepted.
+login_manager.session_protection = "strong"
 
 
 def check_runtime_config(deployed=None):
@@ -35,7 +75,7 @@ def check_runtime_config(deployed=None):
     passes True, since running under gunicorn is deployment by definition.
     """
     if deployed is None:
-        deployed = config.HOST not in LOOPBACK_HOSTS
+        deployed = not config.IS_LOOPBACK
     if deployed and config.SECRET_KEY == config.DEV_SECRET_KEY:
         raise RuntimeError(
             "SECRET_KEY is unset and the built-in dev key is only for loopback — "
@@ -45,21 +85,59 @@ def check_runtime_config(deployed=None):
         raise RuntimeError("JOBMATCH_DEBUG must be off when not serving on loopback.")
 
 
+_deployed = False
+
+
+def mark_deployed():
+    """Tighten what only a loopback dev server is allowed to be lax about.
+
+    Called by `wsgi.py`, which knows something `config.py` cannot: gunicorn
+    binds with `--bind` and never reads HOST, so a container would otherwise
+    look like loopback and hand out session cookies without `Secure`.
+    """
+    global _deployed
+    if _deployed:
+        return
+    _deployed = True
+
+    if not config.SECURE_COOKIE_WAS_SET:
+        app.config["SESSION_COOKIE_SECURE"] = True
+
+    # Behind Caddy every request arrives from the proxy container, so without
+    # this the per-IP rate limits on login and signup are one shared bucket for
+    # the whole internet, and `session_protection = "strong"` pins every session
+    # to the same address. Only as many hops as are actually in front of us are
+    # trusted: X-Forwarded-For is client-supplied and a wrong count here lets a
+    # caller pick their own IP — which is why this is off by default and is
+    # never applied to the dev server, where there is no proxy at all.
+    if config.TRUSTED_PROXY_HOPS > 0:
+        hops = config.TRUSTED_PROXY_HOPS
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app, x_for=hops, x_proto=hops, x_host=hops, x_prefix=0
+        )
+        log.info("trusting %d proxy hop(s) for the client address", hops)
+
+
 def bootstrap_db():
-    """Create/upgrade the schema and close out scans a crash left `running`."""
+    """Create or upgrade the schema. Nothing else — see below.
+
+    Reconciling scans a crash left `running` used to happen here, and can't any
+    more: a web process restarting says nothing about whether a scan is running,
+    because the scan is in another process entirely. That job moved to
+    `jobmatch.worker`, which decides it from the heartbeat.
+    """
     conn = db.get_conn()
     try:
+        # No implicit local user any more: an account arrives through signup or
+        # `python3 -m jobmatch.setpassword`. Creating a passwordless one here
+        # would silently take the "first user is the admin" slot at signup.
         db.init_schema(conn)
-        # Somebody has to own the data before Phase 3 adds real signup.
-        db.ensure_local_user(conn)
-        # A scan thread dies with the process; a row left `running` never finishes.
-        orphaned = conn.execute(
-            "UPDATE scans SET status = 'failed', finished_at = datetime('now'), "
-            "error = 'interrupted by server restart' WHERE status = 'running'"
-        ).rowcount
-        conn.commit()
-        if orphaned:
-            log.warning("reconciled %d orphaned running scan(s)", orphaned)
+        if not db.scans_accepts_queued(conn):
+            # Said at boot rather than discovered by whoever first presses Scan.
+            log.error(
+                "this database predates the scan queue — run "
+                "`python3 -m jobmatch.backfill`, or scans cannot be triggered"
+            )
     finally:
         conn.close()
 
@@ -69,6 +147,7 @@ RESCORE_KEYS = WEIGHT_KEYS + (
 )
 APPLICATION_STATUSES = db.APPLICATION_STATUSES
 JOB_LIMIT = 500  # one page of results; the client says so when it bites
+PDF_MAGIC = b"%PDF-"  # every PDF starts with it; a renamed .exe does not
 
 
 def get_db():
@@ -78,21 +157,25 @@ def get_db():
 
 
 def current_user_id():
-    """The user this request acts as.
+    """The user this request acts as — always the logged-in one.
 
-    Phase 3 replaces the body of this function with Flask-Login; it already
-    reads the session so that adding a real login changes nothing else. Until
-    then a single-user install has exactly one user, and every request is
-    implicitly theirs.
+    Every route that calls this is behind `@login_required`, so `current_user`
+    is guaranteed to be a real row; the assert is here to make that a loud
+    failure rather than a query scoped to `user_id = None`.
     """
-    if "user_id" not in g:
-        conn = get_db()
-        user_id = session.get("user_id")
-        if user_id is not None and db.get_user(conn, user_id) is None:
-            session.pop("user_id", None)  # session outlived the account
-            user_id = None
-        g.user_id = user_id if user_id is not None else db.ensure_local_user(conn)
-    return g.user_id
+    assert current_user.is_authenticated, "route is missing @login_required"
+    return current_user.id
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    """Session id → user row. A deleted account resolves to None and logs out."""
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    row = db.get_user(get_db(), user_id)
+    return auth.User(row) if row else None
 
 
 @app.teardown_appcontext
@@ -102,53 +185,267 @@ def close_db(_exc):
         conn.close()
 
 
+@app.context_processor
+def template_globals():
+    """Instance facts the templates need. `current_user` Flask-Login adds itself."""
+    return {
+        "allow_signup": config.ALLOW_SIGNUP,
+        "min_password_length": config.MIN_PASSWORD_LENGTH,
+        # Who may trigger the shared crawl, and how often it happens anyway.
+        "can_scan": config.SCAN_ENABLED and getattr(current_user, "is_admin", False),
+        "scan_interval_hours": config.SCAN_INTERVAL_HOURS if config.SCAN_ENABLED else 0,
+    }
+
+
+# ── Auth ─────────────────────────────────────────────────────
+
+def wants_json():
+    """True for the fetch() API, false for a browser following a link."""
+    return request.path.startswith("/api/")
+
+
+def safe_next(target):
+    """A same-site redirect target, or None.
+
+    Only a plain absolute path is allowed: `//evil.example` and
+    `https://evil.example` are both valid values of `?next=` and both leave
+    this site, which is the whole open-redirect trick.
+    """
+    if not target or not target.startswith("/") or target.startswith("//"):
+        return None
+    return target
+
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    if wants_json():
+        return jsonify({"error": "Your session has ended — please sign in again."}), 401
+    return redirect(url_for("page_login", next=request.path))
+
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(err):
+    """A missing or stale token is a bad request, not a traceback."""
+    message = "That form or tab went stale — reload the page and try again."
+    log.warning("CSRF rejected on %s %s: %s", request.method, request.path, err.description)
+    if wants_json():
+        return jsonify({"error": message}), 400
+    flash(message)
+    return redirect(request.path), 303
+
+
+@app.errorhandler(413)
+def handle_too_large(_err):
+    message = "That file is too big — the limit is 16 MB."
+    if wants_json():
+        return jsonify({"error": message}), 413
+    return message, 413
+
+
+@app.errorhandler(429)
+def handle_rate_limited(err):
+    message = f"Too many attempts — try again later ({err.description})."
+    if wants_json():
+        return jsonify({"error": message}), 429
+    flash(message)
+    return render_template("auth.html", mode="login", email=""), 429
+
+
+@app.route("/login", methods=["GET", "POST"])
+@limiter.limit("10 per minute; 60 per hour", methods=["POST"])
+def page_login():
+    target = safe_next(request.args.get("next")) or url_for("page_dashboard")
+    if current_user.is_authenticated:
+        return redirect(target)
+
+    email = ""
+    if request.method == "POST":
+        conn = get_db()
+        email = auth.normalize_email(request.form.get("email"))
+        password = request.form.get("password") or ""
+        row = db.get_user_by_email(conn, email)
+        if row is None:
+            # Spend the same time as a real verify would, so response timing
+            # does not answer "is there an account at this address?".
+            auth.dummy_verify(password)
+        elif auth.verify_password(row["password_hash"], password):
+            _start_session(conn, row, password)
+            return redirect(safe_next(request.form.get("next")) or target)
+        # One message for both cases, on purpose.
+        log.info("failed login for %r", email)
+        flash("That email and password do not match an account.")
+
+    return render_template("auth.html", mode="login", email=email, next=target)
+
+
+@app.route("/signup", methods=["GET", "POST"])
+@limiter.limit("5 per minute; 20 per hour", methods=["POST"])
+def page_signup():
+    if not config.ALLOW_SIGNUP:
+        return render_template("auth.html", mode="closed"), 403
+    if current_user.is_authenticated:
+        return redirect(url_for("page_dashboard"))
+
+    email = ""
+    if request.method == "POST":
+        conn = get_db()
+        email = auth.normalize_email(request.form.get("email"))
+        password = request.form.get("password") or ""
+        problem = (
+            auth.email_problem(email)
+            or auth.password_problem(password)
+            or (None if password == request.form.get("confirm") else "The passwords differ.")
+            or (None if db.get_user_by_email(conn, email) is None
+                else "There is already an account with that email.")
+        )
+        if problem:
+            flash(problem)
+        else:
+            # Whoever gets there first owns the instance; on the migrated local
+            # DB that slot is already taken, so signups land as regular users.
+            first = db.default_user_id(conn) is None
+            user_id = db.create_user(
+                conn, email, auth.hash_password(password), is_admin=first
+            )
+            conn.commit()
+            # A new account joins the shared pool with every job unscored-new.
+            db.ensure_user_jobs(conn, user_id)
+            log.info("created user %d (%r, admin=%s)", user_id, email, first)
+            _start_session(conn, db.get_user_by_email(conn, email), password)
+            return redirect(url_for("page_settings"))
+
+    return render_template("auth.html", mode="signup", email=email)
+
+
+def _start_session(conn, row, password):
+    """Log `row` in and take care of what a successful login owes the account."""
+    session.permanent = True
+    login_user(auth.User(row))
+    if auth.needs_rehash(row["password_hash"]):
+        # Same password, current argon2 parameters — a login is the only moment
+        # the plaintext is in hand to redo it with.
+        db.set_password(conn, row["id"], auth.hash_password(password))
+        log.info("rehashed password for user %d", row["id"])
+    # Jobs scanned in while this user was away have no user_jobs row yet.
+    db.ensure_user_jobs(conn, row["id"])
+
+
+@app.post("/logout")
+@login_required
+def do_logout():
+    logout_user()
+    session.clear()
+    return redirect(url_for("page_login"))
+
+
+@app.post("/api/account/delete")
+@login_required
+@limiter.limit("5 per hour")
+def api_account_delete():
+    """Erase the account and everything personal attached to it.
+
+    A CV is personal data and the whole point of a working delete, so the PDF
+    goes with the rows. Deliberately irreversible: no soft-delete flag, nothing
+    left behind but the shared `jobs` pool, which was never this user's.
+    """
+    conn = get_db()
+    user_id = current_user_id()
+    password = (request.get_json(silent=True) or {}).get("password") or ""
+    row = db.get_user_by_email(conn, current_user.email)
+    if row is None or not auth.verify_password(row["password_hash"], password):
+        return jsonify({"error": "That password is not right."}), 403
+
+    pdf_path = config.resume_path(user_id)
+    try:
+        pdf_path.unlink()
+    except FileNotFoundError:
+        pass  # never uploaded one, or already gone
+    except OSError:
+        # The rows still have to go; a stranded PDF is a cleanup problem, not a
+        # reason to leave the account alive.
+        log.exception("could not remove the CV at %s", pdf_path)
+
+    db.delete_user(conn, user_id)
+    logout_user()
+    session.clear()
+    log.info("deleted user %d", user_id)
+    return jsonify({"ok": True, "redirect": url_for("page_login")})
+
+
 # ── Pages ────────────────────────────────────────────────────
 
 @app.route("/")
+@login_required
 def page_dashboard():
     return render_template("dashboard.html", active="dashboard")
 
 
 @app.route("/jobs")
+@login_required
 def page_jobs():
     return render_template("jobs.html", active="jobs")
 
 
 @app.route("/tracker")
+@login_required
 def page_tracker():
     return render_template("tracker.html", active="tracker")
 
 
 @app.route("/settings")
+@login_required
 def page_settings():
     return render_template("settings.html", active="settings")
 
 
 # ── Scan ─────────────────────────────────────────────────────
 
+# One crawl serves everybody, so triggering one is an instance-wide act, not a
+# personal one: regular users read the results of the schedule. This is what
+# stops scraping from multiplying per user.
+SCAN_NOT_YOURS = (
+    "Scans run on a schedule for everyone here — only an admin can start one early."
+)
+
+
 @app.post("/api/scan/start")
+@login_required
+@limiter.limit("6 per hour")
 def api_scan_start():
+    # Scanning is scraping somebody else's site: the limit is about the boards,
+    # not about this server.
     if not config.SCAN_ENABLED:
         return jsonify({"error": "Scanning is switched off on this instance."}), 503
-    state, error = scan.start_scan(user_id=current_user_id(), trigger="manual")
+    if not current_user.is_admin:
+        return jsonify({"error": SCAN_NOT_YOURS}), 403
+    # Queued, not started: the worker process picks it up. Which is why this
+    # returns a `queued` state rather than a `running` one.
+    state, error = scan.enqueue(get_db(), user_id=current_user_id(), trigger="manual")
     if error:
         return jsonify({"error": error}), 409
     return jsonify(state)
 
 
 @app.get("/api/scan/status")
+@login_required
 def api_scan_status():
-    return jsonify(scan.current_status() or {"status": "idle"})
+    # Read from the row, so any web worker can answer for a scan it is not
+    # running — under gunicorn, most of them aren't.
+    return jsonify(scan.current_status(get_db()) or {"status": "idle"})
 
 
 @app.post("/api/scan/cancel")
+@login_required
 def api_scan_cancel():
-    return jsonify({"cancelling": scan.request_stop()})
+    if not current_user.is_admin:
+        return jsonify({"error": SCAN_NOT_YOURS}), 403
+    return jsonify({"cancelling": scan.request_stop(get_db())})
 
 
 # ── Jobs ─────────────────────────────────────────────────────
 
 @app.get("/api/jobs")
+@login_required
 def api_jobs():
     conn = get_db()
     status = request.args.get("status", "new")
@@ -174,8 +471,7 @@ def api_jobs():
         where.append("uj.match_score IS NOT NULL AND uj.match_score >= :min_score")
         params["min_score"] = min_score
 
-    order = ("COALESCE(j.posted_at, j.scraped_at) DESC, uj.match_score DESC" if sort == "date"
-             else "uj.match_score DESC, COALESCE(j.posted_at, j.scraped_at) DESC")
+    order = db.JOB_ORDER["date" if sort == "date" else "score"]
     rows = conn.execute(
         f"""SELECT j.id, j.source, j.source_id, j.title, j.company, j.location,
                    j.salary, j.freshness, j.link, j.skills, j.worktype, j.seniority,
@@ -219,6 +515,7 @@ def api_jobs():
 
 
 @app.post("/api/jobs/<int:job_id>/status")
+@login_required
 def api_job_status(job_id):
     conn = get_db()
     user_id = current_user_id()
@@ -264,6 +561,7 @@ def api_job_status(job_id):
 # ── Applications (tracker) ───────────────────────────────────
 
 @app.get("/api/applications")
+@login_required
 def api_applications():
     conn = get_db()
     user_id = current_user_id()
@@ -306,6 +604,7 @@ def _event_display(event):
 
 
 @app.patch("/api/applications/<int:app_id>")
+@login_required
 def api_application_update(app_id):
     conn = get_db()
     user_id = current_user_id()
@@ -342,6 +641,7 @@ def api_application_update(app_id):
 # ── Settings ─────────────────────────────────────────────────
 
 @app.get("/api/settings")
+@login_required
 def api_settings_get():
     conn = get_db()
     settings = db.get_all_settings(conn, current_user_id())
@@ -362,6 +662,7 @@ def api_settings_get():
 
 
 @app.put("/api/settings")
+@login_required
 def api_settings_put():
     conn = get_db()
     user_id = current_user_id()
@@ -420,6 +721,7 @@ def api_settings_put():
 # ── Resume upload ────────────────────────────────────────────
 
 @app.post("/api/resume")
+@login_required
 def api_resume():
     conn = get_db()
     user_id = current_user_id()
@@ -428,6 +730,11 @@ def api_resume():
         return jsonify({"error": "No file came through — try choosing it again."}), 400
     if not file.filename.lower().endswith(".pdf"):
         return jsonify({"error": "Your CV needs to be a PDF."}), 400
+    # The suffix is a claim by whoever uploaded; the header is the file itself.
+    # Checked before `save()`, so a non-PDF never reaches the disk at all.
+    if file.stream.read(len(PDF_MAGIC)) != PDF_MAGIC:
+        return jsonify({"error": "That file is not a PDF, whatever it is named."}), 400
+    file.stream.seek(0)
 
     # One CV per user, named by user id — never a shared path.
     pdf_path = config.resume_path(user_id)
@@ -464,6 +771,7 @@ def api_resume():
 # ── Stats ────────────────────────────────────────────────────
 
 @app.get("/api/stats")
+@login_required
 def api_stats():
     conn = get_db()
     user_id = current_user_id()
@@ -533,9 +841,14 @@ def _last_scan_summary(row):
 if __name__ == "__main__":
     check_runtime_config()
     bootstrap_db()
+    if config.SCAN_IN_PROCESS:
+        # Local dev stays one command. In a deployment the worker is its own
+        # container and this never runs — `wsgi.py` does not call it, because
+        # every gunicorn process would start a scanner of its own.
+        worker.start_thread()
     log.info("serving on http://%s:%d (debug=%s)", config.HOST, config.PORT, config.DEBUG)
-    # use_reloader=False: the reloader would fork a second process and orphan
-    # the in-module scan thread/state.
+    # use_reloader=False: the reloader would fork a second process, and with it
+    # a second in-process scan worker.
     app.run(
         host=config.HOST,
         port=config.PORT,

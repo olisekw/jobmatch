@@ -10,9 +10,9 @@ offer against your CV and preferences, and tracks where you applied.
 
 ## What it does
 
-- **Scans 6 job boards with one click** — runs in the background with live
-  per-board progress and a cancel button; each board can be toggled in
-  Settings.
+- **Scans 6 job boards on a schedule** — one crawl serves everyone on the
+  instance, run by a separate worker process with live per-board progress and a
+  cancel button; an admin can also trigger one. Each board toggles in Settings.
 
   | Board | Coverage | How |
   |---|---|---|
@@ -46,8 +46,18 @@ playwright install chromium        # only needed for Profesia.sk
 python3 app.py                     # → http://127.0.0.1:8000
 ```
 
-Upgrading from an older database? Apply the additive schema changes and fill
-the new columns (safe, idempotent, never touches your statuses or scores):
+That also runs the scan worker in the same process, which is what you want
+locally. A deployment runs it separately, so that the web tier can be several
+processes while exactly one of them scrapes:
+
+```bash
+gunicorn --bind 0.0.0.0:8000 wsgi:app     # web
+python3 -m jobmatch.worker                # scanning, on its own
+```
+
+Upgrading from an older database? Apply the additive schema changes, run the
+one-time migrations and fill the new columns (safe, idempotent, never touches
+your statuses or scores):
 
 ```bash
 python3 -m jobmatch.backfill
@@ -75,20 +85,26 @@ Both commands are idempotent and read-only towards the CSVs — they stay in
 ## Layout
 
 ```
-app.py                  Flask app: pages + JSON API + scan thread mgmt
+app.py                  Flask app: pages + JSON API + auth; queues scans
+wsgi.py                 gunicorn entrypoint
 config.py               code-level constants (regex patterns, delays, presets)
 jobmatch/
-  db.py                 SQLite (data/jobmatch.db): jobs, applications,
-                        application_events, settings, scans
+  db.py                 SQLite (data/jobmatch.db): users, jobs, user_jobs,
+                        user_settings, applications, application_events,
+                        scans — which doubles as the scan queue
+  auth.py               argon2id hashing, credential rules, the login user
+  worker.py             the scan worker: claims queued scans, reconciles
+                        orphans, schedules the shared crawl
   extract.py            skill/worktype/seniority/employment regex extraction
-  scoring.py            weighted match scoring + rescore_all
-  scan.py               scan orchestrator (thread, progress, cancel,
+  scoring.py            weighted match scoring + rescore_user
+  scan.py               the queue + the scan itself (progress, cancel,
                         browser only when a Playwright board is enabled)
   dates.py              freshness strings → posted date → "days ago"
   salary.py             salary strings → structured pay → ≈ hourly rate
   resume.py             PDF → text → skills
+  setpassword.py        set a password from the shell / create the first admin
   migrate_csv.py        one-time legacy CSV import
-  backfill.py           idempotent column backfill for live databases
+  backfill.py           idempotent column backfill + one-time migrations
   sources/              one adapter per job board
     base.py             JobSource interface + shared HTTP/matching helpers
     profesia.py         kariera.py   remoteok.py   remotive.py
@@ -118,9 +134,16 @@ the site requires Playwright.
 
 ## Notes
 
-- Single user, local machine. No auth. Don't expose it to the internet.
-- Scrapers keep polite delays (5–16 s between page requests on the Slovak
-  boards); a full first scan takes a while — the incremental default
-  (last 7 days) is fast. API boards respond in seconds.
+- Multi-user, with real accounts: sign up at `/signup`, or run
+  `python3 -m jobmatch.setpassword` to set a password from the shell (this is how an
+  account created before logins existed gets one). The job pool is shared by everyone
+  on the instance; scores, statuses and the tracker are yours alone.
+- Still meant for a machine you control — it wants a real `SECRET_KEY` and TLS in front
+  of it before it is worth putting on the open internet.
+- Scanning runs in its own process (`python3 -m jobmatch.worker`); `python3 app.py`
+  starts one in-process so local development stays a single command. Scrapers keep
+  polite delays (5–16 s between page requests on the Slovak boards), so a full first
+  scan takes a while — the incremental default (last 7 days) is fast, and API boards
+  respond in seconds.
 - The database (`data/jobmatch.db`) is the single source of truth and is
   gitignored — back it up if you care about your tracker history.

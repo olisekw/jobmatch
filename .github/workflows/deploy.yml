@@ -1,0 +1,76 @@
+name: Deploy
+
+# On green CI only. `workflow_run` fires after the CI workflow finishes, and the
+# conclusion is checked below — a red test run does not reach the server.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Two deploys pulling and rebuilding on the same box at once is how you get a
+  # half-built image serving traffic.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # workflow_dispatch has no upstream run, so the conclusion is only asserted
+    # when there is one.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Set up the SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pinned, not TOFU: `StrictHostKeyChecking=accept-new` would happily
+          # accept whoever answers on the day DNS is wrong.
+          #   ssh-keyscan -t ed25519 <host>   → the DEPLOY_HOST_KEY secret
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Pull, rebuild and restart
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          # Built on the box rather than pushed from a registry: one moving
+          # part fewer, and a CX22 rebuilds the app layer in seconds because
+          # the Playwright base and the pip layer are both cached. Move to
+          # ghcr.io if image builds ever start costing the box real time.
+          #
+          # `--wait` makes the step fail if a container does not come up
+          # healthy, so a broken deploy is a red workflow and not a silent 502.
+          ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -euo pipefail <<EOF
+            cd "$DEPLOY_PATH"
+            git fetch --prune origin
+            git checkout --detach "$SHA"
+            docker compose up -d --build --wait --remove-orphans
+            docker image prune -f --filter 'until=168h'
+            docker compose ps
+          EOF
+
+      - name: Smoke-test the public URL
+        env:
+          DOMAIN: ${{ secrets.DEPLOY_DOMAIN }}
+        run: |
+          # The login page is the one route that answers without a session, so
+          # a 200 here means TLS, Caddy, gunicorn and the database are all up.
+          code=$(curl --silent --show-error --location --max-time 30 \
+                      --output /dev/null --write-out '%{http_code}' \
+                      "https://$DOMAIN/login")
+          echo "GET https://$DOMAIN/login → $code"
+          test "$code" = "200"

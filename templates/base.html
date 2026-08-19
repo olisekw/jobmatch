@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Where app.js reads the token it puts on every mutating fetch(). #}
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}JobMatch{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
@@ -14,6 +16,13 @@
       <a href="/jobs" class="{{ 'active' if active == 'jobs' }}">Jobs</a>
       <a href="/tracker" class="{{ 'active' if active == 'tracker' }}">Tracker</a>
       <a href="/settings" class="{{ 'active' if active == 'settings' }}">Settings</a>
+      <form class="signout" method="post" action="{{ url_for('do_logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {# A form, not a link: signing out changes state, so it is a POST and
+           carries a token like every other mutation. #}
+        <span class="who" title="{{ current_user.email }}">{{ current_user.email }}</span>
+        <button type="submit">Sign out</button>
+      </form>
     </div>
   </nav>
 
@@ -27,12 +36,17 @@
       <h3>Scanning job boards</h3>
       <div class="phase" id="scan-phase">Starting…</div>
       <div class="counts" id="scan-counts"></div>
-      <button class="btn ghost" id="scan-cancel">Cancel scan</button>
+      {# Only whoever may start the shared scan may stop it. #}
+      {% if can_scan %}<button class="btn ghost" id="scan-cancel">Cancel scan</button>{% endif %}
     </div>
   </div>
 
   <div id="toast"></div>
 
+  {# The scheduled crawl belongs to the instance, not to this tab: without this,
+     a background scan would throw a full-screen modal at a reader who did not
+     ask for one and cannot stop it. #}
+  <script>window.CAN_SCAN = {{ 'true' if can_scan else 'false' }};</script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>

@@ -81,6 +81,23 @@
   <button class="btn mt" id="save-scan">Save scan settings</button>
 </div>
 
+<h2>Account</h2>
+<div class="panel danger-zone">
+  <p>Signed in as <strong class="mono">{{ current_user.email }}</strong>.</p>
+  <p class="hint mt">
+    Deleting your account erases your CV, your settings, your scores and your whole
+    tracker. The shared job pool stays; nothing of yours does. This cannot be undone.
+  </p>
+  <div class="settings-grid mt">
+    <div>
+      <label for="delete-password">Your password, to confirm</label>
+      <input type="password" id="delete-password" autocomplete="current-password">
+      <p class="form-error" id="delete-error" style="display:none"></p>
+    </div>
+  </div>
+  <button class="btn mt" id="delete-account">Delete my account</button>
+</div>
+
 {% endblock %}
 {% block scripts %}
 <script>
@@ -215,6 +232,29 @@ async function uploadResume(file) {
     toast(err.message);
   }
 }
+
+/* Account deletion. Two confirmations on purpose — the password proves it is
+   you, the prompt proves you meant it. */
+document.getElementById("delete-account").addEventListener("click", async () => {
+  const passwordEl = document.getElementById("delete-password");
+  const errorEl = document.getElementById("delete-error");
+  const show = (message) => {
+    errorEl.textContent = message;
+    errorEl.style.display = message ? "" : "none";
+  };
+  show("");
+  if (!passwordEl.value) return show("Enter your password to confirm.");
+  if (!confirm("Delete your account, your CV and your whole tracker? This cannot be undone."))
+    return;
+
+  try {
+    const res = await api("/api/account/delete", { json: { password: passwordEl.value } });
+    window.location = res.redirect;
+  } catch (err) {
+    passwordEl.value = "";
+    show(err.message);
+  }
+});
 
 init();
 </script>

@@ -1,0 +1,43 @@
+# TLS and the reverse proxy. Caddy gets certificates from Let's Encrypt on its
+# own and renews them; nothing here has to be scheduled.
+#
+# DOMAIN and ACME_EMAIL come from the environment (docker-compose.yml passes
+# them through from .env), so this file is the same on every instance.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# HSTS is not on by default and this app is https-only in a deployment —
+	# `mark_deployed()` sets Secure on the session cookie, so a plain-http
+	# request could not log in anyway.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# A CV upload is capped at 16 MB by MAX_CONTENT_LENGTH; rejecting a larger
+	# body here means it never crosses the proxy.
+	request_body {
+		max_size 20MB
+	}
+
+	reverse_proxy web:8000 {
+		# X-Forwarded-For is what Flask-Limiter counts per IP and what
+		# `session_protection = "strong"` pins a session to. Without the
+		# ProxyFix on the other side (see app.mark_deployed) every request
+		# would look like it came from this container.
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

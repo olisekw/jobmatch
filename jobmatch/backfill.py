@@ -9,9 +9,11 @@ Two jobs in one command:
    per-user column out of the shared `jobs` table into `user_jobs`, copy
    `settings` into `user_settings`, stamp `applications`/`application_events`
    with a user_id, and move the CV to `data/resumes/<user_id>.pdf`.
+3. **The one-time move to the scan queue**: rebuild `scans` so its CHECK
+   constraint accepts the `queued` status Phase 4 introduced.
 
-Step 2 detects that it has already run and becomes a no-op, so this stays
-idempotent. It is also **SQLite-only by design**: rewriting tables in place is a
+Steps 2 and 3 detect that they have already run and become no-ops, so this
+stays idempotent. It is also **SQLite-only by design**: rewriting tables in place is a
 migration of an existing local database, and a Phase 5 Postgres deployment
 starts from `create_all` on an empty schema and never takes this path.
 
@@ -199,13 +201,13 @@ def _rebuild(cursor, table, defaults=None):
           + (f", dropped {dropped}" if dropped else ""))
 
 
-def rebuild_tables(db_path, user_id):
-    """Rewrite jobs/applications/application_events into their new shape.
+def _rebuild_transaction(db_path, work):
+    """Run `work(cursor)` inside the SQLite table-rebuild procedure.
 
-    Runs on its own sqlite3 connection in autocommit mode: `PRAGMA foreign_keys`
-    cannot be changed inside a transaction, and the SQLite-documented rebuild
-    procedure requires it off. Everything else is wrapped in one explicit
-    transaction, so a failure anywhere leaves the database untouched.
+    Its own sqlite3 connection in autocommit mode: `PRAGMA foreign_keys` cannot
+    be changed inside a transaction, and the SQLite-documented rebuild requires
+    it off. Everything else is wrapped in one explicit transaction, so a failure
+    anywhere leaves the database untouched.
     """
     raw = sqlite3.connect(str(db_path), timeout=10, isolation_level=None)
     try:
@@ -213,13 +215,7 @@ def rebuild_tables(db_path, user_id):
         cursor = raw.cursor()
         cursor.execute("BEGIN")
         try:
-            _rebuild(cursor, db.jobs)
-            _rebuild(cursor, db.applications, defaults={"user_id": user_id})
-            _rebuild(cursor, db.application_events, defaults={"user_id": user_id})
-            if _cursor_has_table(cursor, "settings"):
-                cursor.execute("DROP TABLE settings")
-                print("settings: dropped (copied into user_settings above)")
-
+            work(cursor)
             violations = cursor.execute("PRAGMA foreign_key_check").fetchall()
             if violations:
                 raise RuntimeError(f"foreign key check failed: {violations[:5]}")
@@ -230,6 +226,42 @@ def rebuild_tables(db_path, user_id):
     finally:
         raw.execute("PRAGMA foreign_keys=ON")
         raw.close()
+
+
+def rebuild_tables(db_path, user_id):
+    """Rewrite jobs/applications/application_events into their new shape."""
+    def work(cursor):
+        _rebuild(cursor, db.jobs)
+        _rebuild(cursor, db.applications, defaults={"user_id": user_id})
+        _rebuild(cursor, db.application_events, defaults={"user_id": user_id})
+        if _cursor_has_table(cursor, "settings"):
+            cursor.execute("DROP TABLE settings")
+            print("settings: dropped (copied into user_settings above)")
+
+    _rebuild_transaction(db_path, work)
+
+
+# ── The one-time move to the scan queue (Phase 4) ────────────
+
+def migrate_scan_queue(conn):
+    """Let `scans` hold a `queued` row. Closes `conn` if it has work to do.
+
+    Phase 4 made `scans` the queue, which added a *status* — and a status lives
+    in a CHECK constraint that SQLite cannot alter in place. `init_schema` had
+    already added the queue's columns to any live database; this is the half it
+    could not do, so it is the same create/copy/drop/rename rebuild as above.
+    Statuses, counts and errors of past scans are copied through untouched.
+    """
+    if db.scans_accepts_queued(conn):
+        print("scan queue: `scans` already accepts queued rows")
+        return
+    if conn.dialect != "sqlite":
+        raise RuntimeError(
+            f"the scan-queue migration rewrites `scans` in place and is SQLite-only; "
+            f"this connection is {conn.dialect}."
+        )
+    conn.close()  # the rebuild needs exclusive access to the file
+    _rebuild_transaction(config.DB_PATH, lambda cursor: _rebuild(cursor, db.scans))
 
 
 def move_resume(user_id):
@@ -272,6 +304,9 @@ def main():
     user_id = migrate_multiuser(conn)
 
     conn = db.get_conn()  # migrate_multiuser closes its connection to rebuild
+    migrate_scan_queue(conn)
+
+    conn = db.get_conn()  # …and so does migrate_scan_queue
     before = {
         (row["user_id"], row["status"]): row["n"]
         for row in conn.execute(

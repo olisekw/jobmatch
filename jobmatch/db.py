@@ -34,18 +34,55 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.schema import CreateColumn
+from sqlalchemy.sql.expression import FunctionElement
 
 import config
 
 metadata = MetaData()
 
-# Timestamp defaults are SQLite-flavoured on purpose. The columns are TEXT and
-# every reader (dates.days_ago, the JSON API, the templates) expects exactly the
-# 'YYYY-MM-DD HH:MM:SS' string datetime('now') produces. Phase 5 swaps these for
-# their Postgres equivalents along with the rest of the dialect gaps.
-NOW = text("(datetime('now'))")
-TODAY = text("(date('now'))")
+
+# Timestamps are TEXT, not a date type, and every reader (dates.days_ago,
+# display.parse, the JSON API, the templates) expects exactly the naive-UTC
+# 'YYYY-MM-DD HH:MM:SS' string SQLite's datetime('now') produces. Keeping the
+# *shape* identical across dialects is what lets a Postgres deployment read a
+# SQLite dump — and what keeps `display.py` from needing to know the backend.
+# So these are constructs with one rendering per dialect rather than raw text().
+class utc_now(FunctionElement):  # noqa: N801 — reads as SQL, not as a class
+    type = Text()
+    inherit_cache = True
+
+
+class utc_today(FunctionElement):  # noqa: N801
+    type = Text()
+    inherit_cache = True
+
+
+@compiles(utc_now, "sqlite")
+def _utc_now_sqlite(_element, _compiler, **_kw):
+    return "(datetime('now'))"
+
+
+@compiles(utc_now)
+def _utc_now_default(_element, _compiler, **_kw):
+    # `now()` is transaction-start time and timestamptz; AT TIME ZONE 'utc'
+    # drops it to naive UTC and to_char pins the format.
+    return "(to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))"
+
+
+@compiles(utc_today, "sqlite")
+def _utc_today_sqlite(_element, _compiler, **_kw):
+    return "(date('now'))"
+
+
+@compiles(utc_today)
+def _utc_today_default(_element, _compiler, **_kw):
+    return "(to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD'))"
+
+
+NOW = utc_now()
+TODAY = utc_today()
 EMPTY = text("''")
 
 JOB_STATUSES = ("new", "applied", "declined")
@@ -62,8 +99,9 @@ users = Table(
     "users", metadata,
     Column("id", Integer, primary_key=True),
     Column("email", Text, nullable=False),
-    # Empty until Phase 3 wires up argon2 — the migrated local user has no
-    # password yet, and an empty hash can never match a verify().
+    # An argon2id hash, written by `jobmatch.auth`. Empty on an account that
+    # predates auth: `verify_password` can never match one, which is what keeps
+    # the migrated local user inert until `jobmatch.setpassword` runs.
     Column("password_hash", Text, nullable=False, server_default=EMPTY),
     Column("created_at", Text, nullable=False, server_default=NOW),
     Column("is_admin", Integer, nullable=False, server_default=text("0")),
@@ -148,26 +186,53 @@ application_events = Table(
 )
 Index("idx_application_events_app", application_events.c.application_id)
 
+# Also the scan **queue** as of Phase 4: a trigger inserts a `queued` row, the
+# worker claims it with a conditional UPDATE, and every bit of live state a
+# status poll needs — phase, counters, heartbeat, cancel flag — is a column
+# here rather than a module global in the process that happens to be scanning.
 scans = Table(
     "scans", metadata,
     Column("id", Integer, primary_key=True),
     Column("started_at", Text, nullable=False, server_default=NOW),
     Column("finished_at", Text),
-    Column("status", Text, nullable=False, server_default=text("'running'")),
+    Column("status", Text, nullable=False, server_default=text("'queued'")),
     Column("found", Integer, nullable=False, server_default=text("0")),
     Column("enriched", Integer, nullable=False, server_default=text("0")),
     Column("matched", Integer, nullable=False, server_default=text("0")),
+    # Descriptions that could not be fetched. Live progress showed it long
+    # before Phase 4; now that a poll reads the row, it has to be stored.
+    Column("failed", Integer, nullable=False, server_default=text("0")),
     Column("error", Text),
     # `error` is a traceback and belongs in the log. This holds the same
     # failures keyed by source name as JSON, so the dashboard can say which
     # boards struggled without showing anybody a stack trace.
     Column("source_errors", Text),
-    # Phase 4 turns this table into the queue; the columns land now so the
-    # migration is not run twice against a live database.
     Column("trigger", Text, nullable=False, server_default=text("'manual'")),
     Column("requested_by", Integer, ForeignKey("users.id")),
+    # The queue columns. `heartbeat_at` is what tells a restarting worker that a
+    # `running` row belongs to a process that died rather than to a live scan;
+    # `cancel_requested` is a stop asked for by a process that isn't the one
+    # scanning, which is now every one of them.
+    Column("phase", Text, nullable=False, server_default=EMPTY),
+    Column("heartbeat_at", Text),
+    Column("claimed_by", Text),
+    Column("cancel_requested", Integer, nullable=False, server_default=text("0")),
     CheckConstraint(_in_list("status", SCAN_STATUSES), name="ck_scans_status"),
 )
+Index("idx_scans_status", scans.c.status)
+
+# How the Jobs page orders the shared pool. Here rather than in `app.py` so the
+# Postgres parity test can run the real fragment.
+#
+# `NULLS LAST` is spelled out because the two backends disagree by default:
+# SQLite sorts NULL below every value (so last, on DESC), Postgres above it
+# (first). Without the clause, jobs whose description has not been fetched yet —
+# deliberately left unscored — would lead the page on Postgres and bury the
+# matches. Both dialects have understood the syntax for years.
+JOB_ORDER = {
+    "score": "uj.match_score DESC NULLS LAST, COALESCE(j.posted_at, j.scraped_at) DESC",
+    "date": "COALESCE(j.posted_at, j.scraped_at) DESC, uj.match_score DESC NULLS LAST",
+}
 
 DEFAULT_SETTINGS = {
     "weight_skill": 0.4,
@@ -189,7 +254,7 @@ DEFAULT_SETTINGS = {
 
 # Settings that belong to the shared crawl rather than to one user. They stay in
 # the per-user table for now (the local user is the admin), but scanning reads
-# them from the admin, not from whoever triggered it — see scan.scan_settings().
+# them from the admin, not from whoever triggered it — see scan._run_scan().
 SCAN_SETTING_KEYS = ("search_terms", "enabled_sources", "scan_days", "active_profile")
 
 
@@ -214,11 +279,16 @@ def get_engine(db_path=None):
     if engine is not None:
         return engine
 
-    if url.startswith(config.SQLITE_URL_PREFIX):
+    is_sqlite = url.startswith(config.SQLITE_URL_PREFIX)
+    if is_sqlite:
         path = config.sqlite_path(url)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    engine = sa.create_engine(url, future=True)
+    # A networked database drops idle connections — a restarted `db` container,
+    # an idle timeout, a NAT table. `pool_pre_ping` turns that into a silent
+    # reconnect at checkout instead of an OperationalError in whoever asked
+    # first. Meaningless (and unsupported cost) against a local file.
+    engine = sa.create_engine(url, future=True, pool_pre_ping=not is_sqlite)
     if engine.dialect.name == "sqlite":
         @sa.event.listens_for(engine, "connect")
         def _sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
@@ -310,35 +380,82 @@ def get_conn(db_path=None):
 
 # ── Schema creation ──────────────────────────────────────────
 
+# Arbitrary but fixed: the key `init_schema` locks on. Postgres advisory locks
+# share one namespace per database, and this app takes exactly one.
+SCHEMA_LOCK_KEY = 0x10B_0A7C  # "job-match" in hex, near enough
+
+
 def init_schema(conn):
     """Create missing tables and add missing *additive* columns. Idempotent.
 
     Columns that are NOT NULL without a server default cannot be bolted onto a
     populated table — those arrive with the one-time table rebuilds in
     `jobmatch.backfill`, which have the data to fill them.
-    """
-    metadata.create_all(conn.sa, checkfirst=True)
-    conn.commit()
 
-    inspector = sa.inspect(conn.sa)
-    for table in metadata.sorted_tables:
-        if not inspector.has_table(table.name):
-            continue
-        existing = {col["name"] for col in inspector.get_columns(table.name)}
-        for column in table.columns:
-            if column.name in existing:
+    Serialized across processes on Postgres: `web` and `worker` are separate
+    containers that start together and both bootstrap, and `checkfirst=True` is
+    an inspect *then* a CREATE — two of them interleaving is a "relation already
+    exists" on a cold deploy. SQLite serializes this on its own file lock.
+    """
+    locked = _lock_schema(conn)
+    try:
+        metadata.create_all(conn.sa, checkfirst=True)
+        conn.commit()
+
+        inspector = sa.inspect(conn.sa)
+        for table in metadata.sorted_tables:
+            if not inspector.has_table(table.name):
                 continue
-            if not column.nullable and column.server_default is None:
-                continue  # backfill's job — it knows what to put there
-            conn.execute(
-                f"ALTER TABLE {table.name} ADD COLUMN {_column_ddl(conn, column)}"
-            )
+            existing = {col["name"] for col in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                if not column.nullable and column.server_default is None:
+                    continue  # backfill's job — it knows what to put there
+                conn.execute(
+                    f"ALTER TABLE {table.name} ADD COLUMN {_column_ddl(conn, column)}"
+                )
+        conn.commit()
+    finally:
+        if locked:
+            _unlock_schema(conn)
+
+
+def _lock_schema(conn):
+    """Take the cross-process DDL lock. False when the dialect has no such thing."""
+    if conn.dialect != "postgresql":
+        return False
+    conn.execute("SELECT pg_advisory_lock(:key)", {"key": SCHEMA_LOCK_KEY})
+    conn.commit()
+    return True
+
+
+def _unlock_schema(conn):
+    conn.execute("SELECT pg_advisory_unlock(:key)", {"key": SCHEMA_LOCK_KEY})
     conn.commit()
 
 
 def _column_ddl(conn, column):
     """DDL fragment for one column, rendered by the dialect that will run it."""
     return str(CreateColumn(column).compile(dialect=conn.sa.dialect))
+
+
+def scans_accepts_queued(conn):
+    """False on a database whose `scans` CHECK constraint predates the queue.
+
+    `init_schema` adds missing *columns*, which is all a live database has ever
+    needed — but Phase 4 also added a status, and SQLite has no ALTER for a
+    CHECK constraint. A `scans` table created before `queued` existed therefore
+    rejects every enqueue, and only the table rebuild in `jobmatch.backfill`
+    fixes it. Both entrypoints check this at boot so the operator hears about it
+    before a user does.
+    """
+    if conn.dialect != "sqlite":
+        return True  # a Postgres deployment gets the current schema from create_all
+    ddl = conn.scalar(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scans'"
+    )
+    return not ddl or "'queued'" in ddl
 
 
 # ── Users ────────────────────────────────────────────────────
@@ -370,18 +487,31 @@ def get_user_by_email(conn, email):
     ).fetchone()
 
 
+def set_password(conn, user_id, password_hash):
+    """Store an already-hashed password. Hashing belongs to `jobmatch.auth`."""
+    conn.execute(
+        "UPDATE users SET password_hash = :password_hash WHERE id = :id",
+        {"password_hash": password_hash, "id": user_id},
+    )
+    conn.commit()
+
+
 def default_user_id(conn):
-    """The single local user, until Phase 3 puts a login in front of everything."""
+    """The oldest account — the one that owns a single-user install's data.
+
+    Also how signup decides whether it is creating the instance's admin.
+    """
     return conn.scalar("SELECT id FROM users ORDER BY id LIMIT 1")
 
 
 def ensure_local_user(conn):
-    """The user everything belongs to before Phase 3 puts a login in front.
+    """The account that owns the data on a database that predates auth.
 
-    Returns the existing user on any populated database, so this is safe to run
-    at every startup. The account is created with an empty password_hash — it
-    cannot be logged into until Phase 3 sets one, which is the intent: it exists
-    to own the local data, not to authenticate.
+    Returns the existing user on any populated database, so the migrations that
+    call it are safe to re-run. The account is created with an empty
+    password_hash and cannot be logged into until `jobmatch.setpassword` sets
+    one — it exists to own the local data, not to authenticate. The web app no
+    longer calls this: an account arrives through signup.
     """
     user_id = default_user_id(conn)
     if user_id is not None:
@@ -418,7 +548,7 @@ def ensure_user_jobs(conn, user_id):
 
 
 def delete_user(conn, user_id):
-    """Wipe everything a user owns. Phase 3 exposes this as account deletion."""
+    """Wipe every row a user owns. The CV file is `app.api_account_delete`'s job."""
     params = {"user_id": user_id}
     for sql in (
         "DELETE FROM application_events WHERE user_id = :user_id",

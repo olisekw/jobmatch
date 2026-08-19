@@ -1,0 +1,78 @@
+{# Login / signup. Deliberately standalone rather than extending base.html:
+   there is no nav to show somebody who is not signed in, and none of the
+   app's JavaScript is any use here. #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobMatch — {% if mode == 'signup' %}Sign up{% else %}Sign in{% endif %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <a class="brand" href="{{ url_for('page_login') }}">JobMatch</a>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for message in messages %}
+          <p class="form-error" role="alert">{{ message }}</p>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    {% if mode == 'closed' %}
+      <h1>Signup is closed</h1>
+      <p class="subtitle">This instance is not taking new accounts.</p>
+      <a class="btn big" href="{{ url_for('page_login') }}">Sign in instead</a>
+
+    {% elif mode == 'signup' %}
+      <h1>Create an account</h1>
+      <p class="subtitle">Scored against your CV, on a job pool everyone shares.</p>
+      <form method="post" action="{{ url_for('page_signup') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ email }}"
+               autocomplete="username" required autofocus>
+
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password"
+               autocomplete="new-password" required
+               minlength="{{ min_password_length }}">
+        <span class="hint">At least {{ min_password_length }} characters.</span>
+
+        <label for="confirm">Password again</label>
+        <input type="password" id="confirm" name="confirm"
+               autocomplete="new-password" required>
+
+        <button class="btn big mt" type="submit">Create account</button>
+      </form>
+      <p class="auth-alt">
+        Already have one? <a href="{{ url_for('page_login') }}">Sign in</a>.
+      </p>
+
+    {% else %}
+      <h1>Sign in</h1>
+      <p class="subtitle">Your jobs, your scores, your tracker.</p>
+      <form method="post" action="{{ url_for('page_login') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ next or '' }}">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ email }}"
+               autocomplete="username" required autofocus>
+
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password"
+               autocomplete="current-password" required>
+
+        <button class="btn big mt" type="submit">Sign in</button>
+      </form>
+      {% if allow_signup %}
+        <p class="auth-alt">
+          No account yet? <a href="{{ url_for('page_signup') }}">Sign up</a>.
+        </p>
+      {% endif %}
+    {% endif %}
+  </main>
+</body>
+</html>

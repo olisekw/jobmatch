@@ -78,8 +78,12 @@ def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _parse(iso):
-    """A stored timestamp or date string → datetime, or None if unusable."""
+def parse(iso):
+    """A stored timestamp or date string → datetime, or None if unusable.
+
+    Public because the scan queue compares heartbeats against it — a stored
+    stamp is a stored stamp whether it ends up on a page or in a WHERE clause.
+    """
     if not iso or not isinstance(iso, str):
         return None
     try:
@@ -96,7 +100,7 @@ def _absolute(day, today):
 
 def relative_date(iso, today=None):
     """Day-granularity age: 'today', '3 days ago', 'last week', '12 Aug'."""
-    parsed = _parse(iso)
+    parsed = parse(iso)
     if parsed is None:
         return ""
     today = today or utcnow().date()
@@ -117,7 +121,7 @@ def relative_date(iso, today=None):
 
 def relative_time(iso, now=None):
     """As `relative_date`, with sub-day resolution for today's events."""
-    parsed = _parse(iso)
+    parsed = parse(iso)
     if parsed is None:
         return ""
     now = now or utcnow()
@@ -139,7 +143,7 @@ def exact_time(iso):
     Date-only columns (applications.applied_at, jobs.posted_at) have no time to
     show, and printing a midnight that was never recorded would be a small lie.
     """
-    parsed = _parse(iso)
+    parsed = parse(iso)
     if parsed is None:
         return ""
     stamp = f"{parsed.day} {parsed.strftime('%b')} {parsed.year}"

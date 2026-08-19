@@ -1,0 +1,114 @@
+# The deployment: four containers on one small VPS.
+#
+#   caddy   → TLS and the only thing bound to a public port
+#   web     → gunicorn; N of these is fine, none of them scrapes
+#   worker  → the single scraper, and the only container that starts Chromium
+#   db      → Postgres 16
+#
+# Exactly one `worker`. The crawl is shared by every user by design (ROADMAP.md)
+# and the Slovak boards are scraped with politeness delays that only mean
+# something if one process is doing it. Do not scale this service.
+#
+#   cp .env.example .env   # then fill in SECRET_KEY, POSTGRES_PASSWORD, DOMAIN
+#   docker compose up -d --build
+
+name: jobmatch
+
+x-app: &app
+  # Built once, by `web` below. Two services declaring the same build *and* the
+  # same tag makes buildkit export it twice in parallel and fail on the second.
+  image: jobmatch:latest
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    # Composed here rather than in .env so the password has one home.
+    DATABASE_URL: postgresql://jobmatch:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/jobmatch
+    DATA_DIR: /app/data
+  volumes:
+    # CVs. The database is Postgres, so this is the only user data on disk.
+    - jobmatch-data:/app/data
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jobmatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: jobmatch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `web` and `worker` both run init_schema at boot; waiting for healthy is
+      # what stops that being a connection error on a cold `up`.
+      test: ["CMD-SHELL", "pg_isready -U jobmatch -d jobmatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    # Not published: only the app containers talk to it. Reach it for a backup
+    # or a psql with `docker compose exec db …`.
+
+  web:
+    <<: *app
+    build:
+      context: .
+    environment:
+      DATABASE_URL: postgresql://jobmatch:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/jobmatch
+      DATA_DIR: /app/data
+      # Belt and braces: wsgi.py never starts the worker thread, and this makes
+      # a config mistake unable to change that.
+      SCAN_IN_PROCESS: "false"
+    expose:
+      - "8000"
+    healthcheck:
+      # The login page is the one route that answers without a session.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8000/login').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: ["python3", "-m", "jobmatch.worker"]
+    # The same image `web` just built — local only, never on a registry, so say
+    # so rather than have compose try to pull `jobmatch:latest` from Docker Hub.
+    pull_policy: never
+    # A scan runs Chromium, which wants more than Docker's default 64 MB of
+    # shared memory; without this the browser dies mid-crawl with a tab crash.
+    shm_size: 512mb
+    # It polls, so it is idle almost always — but a Playwright crawl is the
+    # heaviest thing on the box and must not be able to starve the web tier.
+    deploy:
+      resources:
+        limits:
+          memory: 1500m
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      # Caddy reads these out of the Caddyfile; ACME needs both.
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The issued certificates. Losing this volume means re-issuing, and
+      # Let's Encrypt rate-limits that.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+
+volumes:
+  pgdata:
+  jobmatch-data:
+  caddy-data:
+  caddy-config:

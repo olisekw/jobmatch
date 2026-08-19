@@ -15,10 +15,15 @@
 
 <div class="panel">
   <div style="display:flex; align-items:center; gap:1.5rem; flex-wrap:wrap;">
-    <button class="btn big" id="btn-scan">Scan job boards</button>
+    {# The crawl is shared by every account, so only an admin may set one off;
+       everybody else reads the results of the schedule. #}
+    {% if can_scan %}<button class="btn big" id="btn-scan">Scan job boards</button>{% endif %}
     <div>
-      <div id="last-scan" class="muted">You haven't run a scan yet.</div>
+      <div id="last-scan" class="muted">No scan has run yet.</div>
       <div class="hint" id="scan-problems"></div>
+      {% if scan_interval_hours %}
+        <div class="hint">The job boards are scanned for everyone every {{ scan_interval_hours }} hours.</div>
+      {% endif %}
       <div class="hint" id="scan-hint"></div>
     </div>
   </div>
@@ -48,6 +53,8 @@ async function loadStats() {
   const line = document.getElementById("last-scan");
   if (scan.status === "running") {
     line.textContent = "Scanning right now…";
+  } else if (scan.status === "queued") {
+    line.textContent = "A scan is queued — the worker will pick it up shortly.";
   } else if (scan.status === "done" || scan.status === "cancelled") {
     line.textContent =
       `Last scan ${scan.when} · ${plural(scan.found, "new job")}, ${scan.enriched} analyzed`;
@@ -80,7 +87,8 @@ async function loadTopJobs() {
     </div>`).join("");
 }
 
-document.getElementById("btn-scan").addEventListener("click", () => scanOverlay.start());
+const scanButton = document.getElementById("btn-scan");
+if (scanButton) scanButton.addEventListener("click", () => scanOverlay.start());
 window.onScanFinished = () => { loadStats(); loadTopJobs(); };
 
 loadStats();

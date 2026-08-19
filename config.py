@@ -47,8 +47,9 @@ def resume_path(user_id):
     return RESUME_DIR / f"{int(user_id)}.pdf"
 
 
-# Owner of the data on a single-user install, created at startup when the
-# users table is empty. Phase 3 replaces the implicit login with a real one.
+# Owner of the data on a single-user install: created by the CSV migration and
+# by `jobmatch.backfill`, and the account `jobmatch.setpassword` gives a real
+# password to. The web app no longer creates it — a user arrives via signup.
 LOCAL_USER_EMAIL = (os.environ.get("LOCAL_USER_EMAIL") or "local@jobmatch.local").lower()
 
 # ── Database ─────────────────────────────────────────────────
@@ -83,11 +84,71 @@ HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = _env_int("PORT", 8000)
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
+# Serving on anything but loopback is a deployment. Several defaults below
+# tighten themselves off this, so a deployed instance is safe without being
+# told; `app.check_runtime_config()` refuses the dev key on the same test.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+IS_LOOPBACK = HOST in LOOPBACK_HOSTS
+
+# ── Sessions and accounts ────────────────────────────────────
+# `Secure` would make the cookie invisible over plain http, which is exactly
+# what local dev serves — so it follows the bind rather than being hardcoded.
+# HOST only describes `python3 app.py`: gunicorn binds with --bind and never
+# reads it, so `app.mark_deployed()` turns this on for that case. Setting the
+# variable explicitly wins over both, which is the escape hatch for running
+# gunicorn locally over plain http.
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", not IS_LOOPBACK)
+SECURE_COOKIE_WAS_SET = bool((os.environ.get("SESSION_COOKIE_SECURE") or "").strip())
+# Days a login survives. Lax + this is the whole session policy.
+SESSION_DAYS = _env_int("SESSION_DAYS", 14)
+
+# Open signup is what the SaaS direction wants; the flag is what closes the
+# door on a deployed instance without a code change.
+ALLOW_SIGNUP = _env_bool("ALLOW_SIGNUP", True)
+
+# Shortest password accepted at signup. Length is the only rule — composition
+# rules push people towards "Password1!" and buy nothing.
+MIN_PASSWORD_LENGTH = _env_int("MIN_PASSWORD_LENGTH", 10)
+
+# Flask-Limiter backend. In-memory is per-process and resets on restart, which
+# is honest for one gunicorn worker; Phase 5 can point this at redis://.
+RATELIMIT_STORAGE_URI = os.environ.get("RATELIMIT_STORAGE_URI") or "memory://"
+RATELIMIT_ENABLED = _env_bool("RATELIMIT_ENABLED", True)
+
+# How many reverse proxies sit in front of the app — 1 for the Caddy in
+# docker-compose.yml, 2 if a CDN is added later. Only consulted by
+# `app.mark_deployed()`, i.e. under gunicorn: the dev server has no proxy, and
+# trusting a hop that is not there lets a caller name their own IP in
+# X-Forwarded-For and walk past the per-IP rate limits. 0 turns it off.
+TRUSTED_PROXY_HOPS = _env_int("TRUSTED_PROXY_HOPS", 1)
+
+# ── Scanning and the worker ──────────────────────────────────
 # Scanning is a scraping operation: off means the trigger endpoint refuses
-# rather than silently doing nothing. Phase 4 moves execution to a worker.
+# rather than silently doing nothing, and the worker stops scheduling.
 SCAN_ENABLED = _env_bool("SCAN_ENABLED", True)
 
-# Read-only public demo (Phase 6). Declared here so deployment config has one home.
+# How often the worker enqueues a scan of its own. The crawl is shared by every
+# user (see ROADMAP.md), so this is the only thing that decides how hard the
+# boards get hit — 0 disables scheduling and leaves only manual scans.
+SCAN_INTERVAL_HOURS = _env_int("SCAN_INTERVAL_HOURS", 6)
+
+# How often the worker looks for a queued scan. A manual scan waits this long
+# at worst before it starts, so keep it small; it is one indexed SELECT.
+WORKER_POLL_SECONDS = _env_int("WORKER_POLL_SECONDS", 10)
+
+# A running scan writes a heartbeat this often, and is declared dead — its row
+# closed out so it stops blocking the queue — after this long without one.
+# The gap has to be several heartbeats wide, or a slow write reaps a live scan.
+SCAN_HEARTBEAT_SECONDS = _env_int("SCAN_HEARTBEAT_SECONDS", 15)
+SCAN_STALE_SECONDS = _env_int("SCAN_STALE_SECONDS", 90)
+
+# `python3 app.py` runs the worker loop in a thread so local development needs
+# one command, not two. Deliberately ignored by wsgi.py: under gunicorn every
+# worker process would start one, and N processes scraping the same boards is
+# exactly what Phase 4 exists to prevent.
+SCAN_IN_PROCESS = _env_bool("SCAN_IN_PROCESS", True)
+
+# Read-only public demo (Phase 7). Declared here so deployment config has one home.
 DEMO_MODE = _env_bool("DEMO_MODE", False)
 
 # ── Web scraping ─────────────────────────────────────────────

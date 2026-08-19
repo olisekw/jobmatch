@@ -1,5 +1,8 @@
 /* Shared helpers: API wrapper, toast, scan overlay with status polling. */
 
+const CSRF_TOKEN =
+  document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
+
 async function api(path, options = {}) {
   if (options.json !== undefined) {
     options.method = options.method || "POST";
@@ -7,7 +10,19 @@ async function api(path, options = {}) {
     options.body = JSON.stringify(options.json);
     delete options.json;
   }
+  const method = (options.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    // Flask-WTF looks for the token in this header when the body is JSON or a
+    // FormData upload rather than a real <form>.
+    options.headers = { ...(options.headers || {}), "X-CSRFToken": CSRF_TOKEN };
+  }
   const res = await fetch(path, options);
+  // An expired session answers every fetch with 401; sending the user to the
+  // login page beats a toast on a page that can no longer load anything.
+  if (res.status === 401) {
+    window.location = "/login?next=" + encodeURIComponent(window.location.pathname);
+    return new Promise(() => {});  // never resolves: the navigation is the outcome
+  }
   const data = await res.json().catch(() => ({}));
   // The server phrases its own errors; anything else was never meant to be read.
   if (!res.ok) throw new Error(data.error || "Something went wrong — please try again.");
@@ -28,13 +43,17 @@ function toast(message) {
 const scanOverlay = {
   el: null,
   timer: null,
+  watching: false,   // a scan was in progress the last time we looked
 
   init() {
     this.el = document.getElementById("scan-overlay");
-    document.getElementById("scan-cancel").addEventListener("click", async () => {
-      await api("/api/scan/cancel", { method: "POST" });
-      document.getElementById("scan-phase").textContent = "Stopping…";
-    });
+    const cancel = document.getElementById("scan-cancel");
+    if (cancel) {
+      cancel.addEventListener("click", async () => {
+        await api("/api/scan/cancel", { method: "POST" });
+        document.getElementById("scan-phase").textContent = "Stopping…";
+      });
+    }
     // Reattach if a scan is already running (e.g. after page reload)
     this.poll(true);
   },
@@ -67,13 +86,28 @@ const scanOverlay = {
       return;
     }
 
-    if (status.status === "running") {
-      this.open();
-      document.getElementById("scan-phase").textContent = status.phase || "Working…";
+    if (status.status === "running" || status.status === "queued") {
+      // Scans are queued, not started, so a trigger shows "waiting for a
+      // worker" for a poll or two before the phases start moving.
+      if (window.CAN_SCAN) this.open();
+      document.getElementById("scan-phase").textContent =
+        status.cancelling ? "Stopping…" : (status.phase || "Working…");
       document.getElementById("scan-counts").textContent =
         `${plural(status.found, "new job")} · ${status.enriched} analyzed` +
         (status.failed ? ` · ${status.failed} could not be read` : "");
       this.schedule();
+      this.watching = true;
+      return;
+    }
+
+    // A scheduled scan finishing still refreshes the page for everyone; only
+    // the person who could have started it gets told about it.
+    if (!initial && !window.CAN_SCAN) {
+      this.close();
+      if (this.watching && typeof window.onScanFinished === "function") {
+        window.onScanFinished();
+      }
+      this.watching = false;
       return;
     }
 

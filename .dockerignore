@@ -1,0 +1,32 @@
+# The database and every CV in it. `data/` is the user's, never the image's —
+# it arrives as a volume mount at runtime.
+data/
+
+.git/
+.github/
+.claude/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Secrets. The deployment injects the environment; baking .env into a layer
+# would put SECRET_KEY and the DB password in the image history.
+.env
+.env.local
+
+tests/
+debug_output/
+debug_pages_*/
+
+*.md
+!README.md
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

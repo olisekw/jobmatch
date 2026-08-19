@@ -56,6 +56,22 @@ nav .links a {
 nav .links a:hover { color: var(--paper); }
 nav .links a.active { color: var(--ink); background: var(--paper); font-weight: 600; }
 
+nav .signout {
+  display: flex; align-items: center; gap: 0.7rem;
+  margin-left: 0.9rem; padding-left: 1.1rem;
+  border-left: 1px solid var(--gray-4);
+}
+nav .signout .who {
+  font-size: 0.78rem; color: var(--gray-3);
+  max-width: 15ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+nav .signout button {
+  font: inherit; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase;
+  background: none; border: 1px solid var(--gray-4); color: var(--gray-3);
+  padding: 0.3rem 0.7rem; cursor: pointer;
+}
+nav .signout button:hover { color: var(--paper); border-color: var(--paper); }
+
 main { max-width: 1080px; margin: 0 auto; padding: 2.5rem 2rem 5rem; }
 
 /* ── Typography ──────────────────────────────────────── */
@@ -89,7 +105,8 @@ h2 {
 .btn.small { padding: 0.3rem 0.8rem; font-size: 0.78rem; }
 .btn.big { padding: 0.85rem 2.2rem; font-size: 0.95rem; }
 
-input[type="text"], input[type="number"], textarea, select {
+input[type="text"], input[type="number"], input[type="email"],
+input[type="password"], textarea, select {
   font: inherit;
   font-size: 0.9rem;
   padding: 0.5rem 0.7rem;
@@ -283,9 +300,35 @@ tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9re
 .right { margin-left: auto; }
 .mt { margin-top: 1rem; }
 
+/* ── Sign in / sign up ───────────────────────────────── */
+.auth-page { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.auth-card { width: 100%; max-width: 380px; padding: 2rem; }
+.auth-card .brand {
+  display: block; margin-bottom: 2rem;
+  font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+  text-decoration: none;
+}
+.auth-card .subtitle { margin-bottom: 1.8rem; }
+.auth-card label { margin-top: 1rem; }
+.auth-card .hint { display: block; margin-top: 0.3rem; }
+.auth-card .btn.big { width: 100%; margin-top: 1.6rem; }
+.auth-alt { margin-top: 1.6rem; font-size: 0.85rem; color: var(--gray-4); }
+
+/* Errors that belong to a form say so where the form is, not in a toast that
+   is gone in 3.5 seconds. */
+.form-error {
+  border: 1px solid var(--ink); border-left-width: 4px;
+  padding: 0.6rem 0.8rem; margin-bottom: 1.2rem; font-size: 0.85rem;
+}
+
+.danger-zone { border-color: var(--ink); }
+.danger-zone .btn { background: var(--paper); color: var(--ink); border-color: var(--ink); }
+.danger-zone .btn:hover { background: var(--ink); color: var(--paper); opacity: 1; }
+
 @media (max-width: 720px) {
   nav { padding: 0 1rem; gap: 1rem; }
   main { padding: 1.5rem 1rem 4rem; }
   .job { grid-template-columns: 60px 1fr; }
   .job .actions { grid-column: 1 / -1; flex-direction: row; }
+  nav .signout .who { display: none; }
 }
