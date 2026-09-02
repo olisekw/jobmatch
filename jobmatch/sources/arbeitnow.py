@@ -2,6 +2,12 @@
 
 GET https://www.arbeitnow.com/api/job-board-api?page=N (paginated feed,
 created_at is epoch). Only remote-flagged jobs are kept, per user decision.
+
+`ctx.regions` is ignored, but for the opposite reason to the worldwide feeds:
+this board is German and EU-shaped already, so there is no continent being
+scraped and thrown away. Its filters (`visa_sponsorship`) are about who may
+take a job rather than where it is; an unknown parameter is accepted and
+ignored, as on Remotive, so nothing here may be guessed at.
 """
 
 import datetime
@@ -24,6 +30,7 @@ class ArbeitnowSource(JobSource):
     name = "arbeitnow"
     label = "Arbeitnow"
     provides = frozenset({"worktype", "employment_type"})
+    has_detail_page = False   # the feed carries the description
 
     def search(self, page, terms, days, known_ids, ctx):
         cutoff = posted_cutoff(days)
@@ -35,6 +42,7 @@ class ArbeitnowSource(JobSource):
             ctx.progress(f"Reading the {self.label} feed — page {pg}")
             data = json.loads(http_get(API_URL.format(page=pg)))
             items = data.get("data", [])
+            ctx.seen(len(items))
             if not items:
                 break
 

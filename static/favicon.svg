@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The app's own look: black paper, white mark, no colour anywhere. The
+       media query gives it a light square in a dark browser chrome. -->
+  <style>
+    .bg { fill: #111111; }
+    .fg { fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #ffffff; }
+      .fg { fill: #111111; }
+    }
+  </style>
+  <rect class="bg" width="64" height="64"/>
+  <!-- A checkmark: the whole app is "is this one worth your time?" -->
+  <path class="fg" d="M13 33 l11 11 l27 -27 l-7 -7 l-20 20 l-4 -4 z"/>
+</svg>

@@ -30,14 +30,31 @@
 </div>
 
 <h2>Best matches right now</h2>
-<div id="top-jobs"><div class="empty">Loading…</div></div>
+<div id="top-jobs"></div>
 <p class="mt"><a href="/jobs">See all your matches →</a></p>
 
 {% endblock %}
 {% block scripts %}
 <script>
-async function loadStats() {
-  const s = await api("/api/stats");
+const topJobs = document.getElementById("top-jobs");
+
+/* One request, both halves of the page: the top-jobs query needs the same
+   threshold the stat tiles show, and asking twice was asking the same
+   question twice. */
+async function loadDashboard() {
+  showLoading(topJobs, 3);
+  let stats;
+  try {
+    stats = await api("/api/stats");
+  } catch (err) {
+    showError(topJobs, err.message, loadDashboard);
+    return;
+  }
+  renderStats(stats);
+  await loadTopJobs(stats.threshold);
+}
+
+function renderStats(s) {
   document.getElementById("st-matched").textContent = s.matched;
   document.getElementById("st-new").textContent = s.new_jobs;
   document.getElementById("st-applied").textContent = s.applied;
@@ -68,30 +85,28 @@ async function loadStats() {
     : "";
 }
 
-async function loadTopJobs() {
-  const container = document.getElementById("top-jobs");
-  const stats = await api("/api/stats");
-  const data = await api(`/api/jobs?status=new&min_score=${stats.threshold}&sort=score`);
-  if (!data.jobs.length) {
-    container.innerHTML = '<div class="empty">Nothing clears your match bar yet. Run a scan, or lower the bar in Settings.</div>';
+async function loadTopJobs(threshold) {
+  let data;
+  try {
+    data = await api(`/api/jobs?status=new&min_score=${threshold}&sort=score&limit=5`);
+  } catch (err) {
+    showError(topJobs, err.message, loadDashboard);
     return;
   }
-  container.innerHTML = data.jobs.slice(0, 5).map(j => `
-    <div class="job">
-      <div class="score ${scoreClass(j.match_score)}" title="${esc(breakdownTitle(j.score_breakdown))}">${scoreText(j.match_score)}</div>
-      <div>
-        <a class="title" href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.title)}</a>
-        <div class="meta">${jobMeta(j)}</div>
-        <div class="tags">${factTags(j)}</div>
-      </div>
-    </div>`).join("");
+  topJobs.removeAttribute("aria-busy");
+  if (!data.jobs.length) {
+    topJobs.innerHTML = '<div class="empty">Nothing clears your match bar yet. Run a scan, or lower the bar in Settings.</div>';
+    return;
+  }
+  topJobs.innerHTML = data.jobs.map(j => jobCard(j, { actions: false, skills: false })).join("");
 }
 
-const scanButton = document.getElementById("btn-scan");
-if (scanButton) scanButton.addEventListener("click", () => scanOverlay.start());
-window.onScanFinished = () => { loadStats(); loadTopJobs(); };
+wireBreakdownToggles(topJobs);
 
-loadStats();
-loadTopJobs();
+const scanButton = document.getElementById("btn-scan");
+if (scanButton) scanButton.addEventListener("click", () => scanStrip.start());
+window.onScanFinished = loadDashboard;
+
+loadDashboard();
 </script>
 {% endblock %}

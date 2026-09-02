@@ -7,48 +7,85 @@
 
 <div class="filters">
   <div class="field">
-    <span>Status</span>
-    <div class="tabs" id="status-tabs">
-      <button data-status="new" class="active">Matches</button>
-      <button data-status="new-all">Everything new</button>
-      <button data-status="applied">Applied</button>
-      <button data-status="declined">Declined</button>
+    <span id="status-label">Status</span>
+    <div class="tabs" id="status-tabs" role="group" aria-labelledby="status-label">
+      <button type="button" data-status="new" class="active" aria-pressed="true">Matches</button>
+      <button type="button" data-status="new-all" aria-pressed="false">Everything new</button>
+      <button type="button" data-status="applied" aria-pressed="false">Applied</button>
+      <button type="button" data-status="declined" aria-pressed="false">Declined</button>
     </div>
   </div>
   <div class="field">
-    <span>Min score <span class="hint">(matches only)</span></span>
+    <label for="f-score">Min score <span class="hint">(matches only)</span></label>
     <div class="range-wrap">
       <input type="range" id="f-score" min="0" max="100" step="5" value="20">
-      <output id="f-score-out">20%</output>
+      <output id="f-score-out" for="f-score">20%</output>
     </div>
   </div>
   <div class="field">
-    <span>Search</span>
+    <label for="f-q">Search</label>
     <input type="text" id="f-q" placeholder="title or company…">
   </div>
   <div class="field">
-    <span>Source</span>
+    <label for="f-worktype">Work mode</label>
+    <select id="f-worktype"><option value="">Any</option></select>
+  </div>
+  <div class="field">
+    <label for="f-country">Country</label>
+    <select id="f-country"><option value="">All countries</option></select>
+  </div>
+  <div class="field">
+    <label for="f-pay">Pay</label>
+    <select id="f-pay">
+      <option value="">Any</option>
+      <option value="listed">Salary listed</option>
+    </select>
+    <span class="hint">in the job's own currency</span>
+  </div>
+  <div class="field">
+    <label for="f-source">Source</label>
     <select id="f-source"><option value="">All</option></select>
   </div>
   <div class="field">
-    <span>Sort</span>
+    <label for="f-sort">Sort</label>
     <select id="f-sort">
       <option value="score">Best match</option>
       <option value="date">Newest</option>
+      <option value="pay">Best pay</option>
     </select>
   </div>
 </div>
 
 <div class="count-note" id="count-note"></div>
-<div id="job-list"><div class="empty">Loading…</div></div>
+<div id="job-list"></div>
+<div class="more-row" id="more-row" hidden>
+  <button type="button" class="btn ghost" id="btn-more">Load more</button>
+  <span class="hint" id="more-note"></span>
+</div>
+<p class="hint kbd-hint">
+  Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>a</kbd> applied, <kbd>d</kbd> decline,
+  <kbd>s</kbd> score breakdown, <kbd>Enter</kbd> open, <kbd>/</kbd> search.
+</p>
 
 {% endblock %}
 {% block scripts %}
 <script>
-const state = { status: "new", useThreshold: true };
+const state = { status: "new", useThreshold: true, offset: 0, jobs: [], total: 0 };
+// Which request the list belongs to. Changing two filters quickly fires two
+// requests, and without this the slower one is free to land second and put its
+// stale rows on screen — with six filters that stopped being hypothetical.
+let latest = 0;
+const list = document.getElementById("job-list");
 
 async function init() {
-  const settings = await api("/api/settings");
+  showLoading(list);
+  let settings;
+  try {
+    settings = await api("/api/settings");
+  } catch (err) {
+    showError(list, err.message, init);
+    return;
+  }
   const slider = document.getElementById("f-score");
   slider.value = settings.min_match_score;
   document.getElementById("f-score-out").textContent = `${settings.min_match_score}%`;
@@ -58,19 +95,27 @@ async function init() {
     sourceSel.insertAdjacentHTML("beforeend",
       `<option value="${esc(name)}">${esc(label)}</option>`);
   }
+  // Worktype labels and the country list both come from the server: the words
+  // on a chip and the words in the filter that hides it have to be the same.
+  const modeSel = document.getElementById("f-worktype");
+  for (const opt of settings.worktype_options) {
+    modeSel.insertAdjacentHTML("beforeend",
+      `<option value="${esc(opt.value)}">${esc(opt.label)}</option>`);
+  }
+  const countrySel = document.getElementById("f-country");
+  for (const opt of settings.available_countries) {
+    countrySel.insertAdjacentHTML("beforeend",
+      `<option value="${esc(opt.value)}">${esc(opt.label)}</option>`);
+  }
+  const paySel = document.getElementById("f-pay");
+  for (const floor of settings.pay_floors) {
+    paySel.insertAdjacentHTML("beforeend",
+      `<option value="${floor.value}">${esc(floor.label)}</option>`);
+  }
   await loadJobs();
 }
 
-function actionsFor(job) {
-  if (job.status === "new") return `
-    <button class="btn small" data-act="applied">Applied ✓</button>
-    <button class="btn small ghost" data-act="declined">Decline</button>`;
-  if (job.status === "declined") return `
-    <button class="btn small ghost" data-act="new">Restore</button>`;
-  return `<button class="btn small ghost" data-act="new">Un-apply</button>`;
-}
-
-async function loadJobs() {
+function currentParams() {
   const params = new URLSearchParams({
     status: state.status,
     sort: document.getElementById("f-sort").value,
@@ -79,56 +124,108 @@ async function loadJobs() {
   if (q) params.set("q", q);
   const source = document.getElementById("f-source").value;
   if (source) params.set("source", source);
+  for (const [id, name] of [["f-worktype", "worktype"], ["f-country", "country"],
+                            ["f-pay", "pay"]]) {
+    const value = document.getElementById(id).value;
+    if (value) params.set(name, value);
+  }
   if (state.status === "new" && state.useThreshold) {
     params.set("min_score", document.getElementById("f-score").value);
   }
+  return params;
+}
 
-  const data = await api(`/api/jobs?${params}`);
-  const list = document.getElementById("job-list");
-  document.getElementById("count-note").textContent =
-    plural(data.count, "job") + (data.truncated ? ", showing the best ones first" : "");
+/* A filter change replaces the list; "Load more" appends to it. Both go
+   through here so the two paths cannot disagree about what is on screen. */
+async function loadJobs({ append = false } = {}) {
+  const params = currentParams();
+  if (append) params.set("offset", state.offset);
 
-  if (!data.jobs.length) {
-    list.innerHTML = '<div class="empty">Nothing here yet. Try lowering the minimum score, or run a scan.</div>';
+  const more = document.getElementById("more-row");
+  if (append) {
+    document.getElementById("btn-more").disabled = true;
+  } else {
+    // A filter change is a request in flight, not an empty page: keep the old
+    // rows visible but dimmed until the new ones land.
+    state.offset = 0;
+    more.hidden = true;
+    if (state.jobs.length) list.classList.add("pending");
+    else showLoading(list);
+  }
+
+  const token = ++latest;
+  let data;
+  try {
+    data = await api(`/api/jobs?${params}`);
+  } catch (err) {
+    if (token !== latest) return;
+    list.classList.remove("pending");
+    document.getElementById("btn-more").disabled = false;
+    if (append) toast(err.message);
+    else showError(list, err.message, () => loadJobs());
+    return;
+  }
+  if (token !== latest) return;  // a newer filter is already on its way
+
+  state.jobs = append ? state.jobs.concat(data.jobs) : data.jobs;
+  state.offset = state.jobs.length;
+  state.total = data.total;
+  render(data.has_more);
+}
+
+function render(hasMore) {
+  const keptFocus = list.contains(document.activeElement) || document.activeElement === document.body;
+  list.classList.remove("pending");
+  list.removeAttribute("aria-busy");
+  document.getElementById("count-note").textContent = state.total
+    ? `${plural(state.total, "job")}${state.jobs.length < state.total
+        ? ` · showing the first ${state.jobs.length}` : ""}`
+    : "";
+
+  if (!state.jobs.length) {
+    // Six filters now, so "nothing here" has to say which knobs there are.
+    list.innerHTML = `<div class="empty">Nothing matches these filters. Try a lower
+      minimum score, a wider country, work mode or pay — or run a scan.</div>`;
+    document.getElementById("more-row").hidden = true;
     return;
   }
 
-  list.innerHTML = data.jobs.map(j => `
-    <div class="job" data-id="${j.id}">
-      <div class="score ${scoreClass(j.match_score)}" title="${esc(breakdownTitle(j.score_breakdown))}">${scoreText(j.match_score)}</div>
-      <div>
-        <a class="title" href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.title)}</a>
-        <div class="meta" title="${j.posted_exact ? "Posted " + esc(j.posted_exact) : ""}">${jobMeta(j)}</div>
-        <div class="tags">
-          ${factTags(j)}
-          ${(j.skills || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 8)
-              .map(s => `<span class="tag">${esc(s)}</span>`).join("")}
-        </div>
-      </div>
-      <div class="actions">${actionsFor(j)}</div>
-    </div>`).join("");
+  list.innerHTML = state.jobs.map(j => jobCard(j)).join("");
+  document.getElementById("more-row").hidden = !hasMore;
+  document.getElementById("more-note").textContent = hasMore
+    ? `${state.total - state.jobs.length} more` : "";
+  if (cursor >= state.jobs.length) cursor = state.jobs.length - 1;
+  // Keep the cursor where it was, but never yank focus out of the filter the
+  // user is still typing in: re-focus only if focus was on the list already.
+  if (cursor >= 0) markCursor({ focus: keptFocus });
 }
 
-document.getElementById("job-list").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-act]");
-  if (!btn) return;
-  const jobId = btn.closest(".job").dataset.id;
-  btn.disabled = true;
+async function setStatus(jobId, status, btn) {
+  if (btn) btn.disabled = true;
   try {
-    await api(`/api/jobs/${jobId}/status`, { json: { status: btn.dataset.act } });
-    toast(btn.dataset.act === "applied" ? "Added to your tracker." : "Updated.");
+    await api(`/api/jobs/${jobId}/status`, { json: { status } });
+    toast(status === "applied" ? "Added to your tracker." : "Updated.");
     await loadJobs();
   } catch (err) {
     toast(err.message);
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
+}
+
+list.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  setStatus(btn.closest(".job").dataset.id, btn.dataset.act, btn);
 });
+wireBreakdownToggles(list);
 
 document.getElementById("status-tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button");
   if (!btn) return;
-  document.querySelectorAll("#status-tabs button").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
+  document.querySelectorAll("#status-tabs button").forEach(b => {
+    b.classList.toggle("active", b === btn);
+    b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+  });
   const value = btn.dataset.status;
   state.status = value === "new-all" ? "new" : value;
   state.useThreshold = value === "new";
@@ -138,15 +235,77 @@ document.getElementById("status-tabs").addEventListener("click", (e) => {
 let qTimer;
 document.getElementById("f-q").addEventListener("input", () => {
   clearTimeout(qTimer);
-  qTimer = setTimeout(loadJobs, 250);
+  qTimer = setTimeout(() => loadJobs(), 250);
 });
 document.getElementById("f-score").addEventListener("input", (e) => {
   document.getElementById("f-score-out").textContent = `${e.target.value}%`;
 });
-document.getElementById("f-score").addEventListener("change", loadJobs);
-document.getElementById("f-source").addEventListener("change", loadJobs);
-document.getElementById("f-sort").addEventListener("change", loadJobs);
-window.onScanFinished = loadJobs;
+document.getElementById("f-score").addEventListener("change", () => loadJobs());
+for (const id of ["f-source", "f-worktype", "f-country", "f-pay"]) {
+  document.getElementById(id).addEventListener("change", () => loadJobs());
+}
+document.getElementById("f-sort").addEventListener("change", () => loadJobs());
+document.getElementById("btn-more").addEventListener("click", () => loadJobs({ append: true }));
+window.onScanFinished = () => loadJobs();
+
+/* ── Keyboard ─────────────────────────────────────────────
+   This layout has been asking for it: a triage list is a list you go down. */
+
+let cursor = -1;
+
+function markCursor({ focus = true } = {}) {
+  const cards = list.querySelectorAll(".job");
+  cards.forEach((c, i) => c.classList.toggle("cursor", i === cursor));
+  const card = cards[cursor];
+  if (!card || !focus) return;
+  card.focus({ preventScroll: true });
+  card.scrollIntoView({ block: "nearest" });
+}
+
+function move(delta) {
+  if (!state.jobs.length) return;
+  cursor = Math.min(state.jobs.length - 1, Math.max(0, cursor + delta));
+  markCursor();
+}
+
+document.addEventListener("keydown", (e) => {
+  const el = document.activeElement;
+  const typing = el && ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  if (e.key === "/" && !typing) {
+    e.preventDefault();
+    document.getElementById("f-q").focus();
+    return;
+  }
+  if (e.key === "Escape" && typing) { el.blur(); return; }
+  if (typing) return;
+  // A focused button or link owns its own keys — Enter there means "press me",
+  // not "open the job under the cursor". The cursor focuses the card itself,
+  // so triage still gets every shortcut below.
+  if (el && el.closest && el.closest("button, a")) return;
+
+  const job = state.jobs[cursor];
+  switch (e.key) {
+    case "j": e.preventDefault(); move(1); break;
+    case "k": e.preventDefault(); move(-1); break;
+    case "a":
+      if (job) { e.preventDefault(); setStatus(job.id, "applied"); }
+      break;
+    case "d":
+      if (job) { e.preventDefault(); setStatus(job.id, "declined"); }
+      break;
+    case "s":
+      if (job) {
+        e.preventDefault();
+        toggleBreakdown(list.querySelector(`.job[data-id="${job.id}"] button.score`));
+      }
+      break;
+    case "Enter":
+      if (job) { e.preventDefault(); window.location = `/jobs/${job.id}`; }
+      break;
+  }
+});
 
 init();
 </script>

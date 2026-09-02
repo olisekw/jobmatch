@@ -2,9 +2,9 @@
 
 Two jobs in one command:
 
-1. **Additive column backfill** (the original purpose): fill NULLs in posted_at
-   and the structured salary columns, and keep enabled_sources in step with the
-   registry. Never touches statuses, scores, applications or user-edited values.
+1. **Additive column backfill** (the original purpose): fill NULLs in posted_at,
+   the structured salary columns and `country`, and keep enabled_sources in step
+   with the registry. Never touches statuses, scores, applications or user-edited values.
 2. **The one-time move to multi-tenancy**: create the local user, lift every
    per-user column out of the shared `jobs` table into `user_jobs`, copy
    `settings` into `user_settings`, stamp `applications`/`application_events`
@@ -32,7 +32,7 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 import config
 
-from . import dates, db, salary
+from . import dates, db, places, salary
 from .sources import SOURCES
 
 _DIALECT = sqlite_dialect.dialect()
@@ -75,6 +75,68 @@ def backfill_salary(conn):
         filled += 1
     conn.commit()
     print(f"salary: {filled}/{len(rows)} rows parsed into structured columns")
+
+
+def backfill_country(conn):
+    """Derive `jobs.country` for rows that predate the column, or a new pattern.
+
+    Only NULLs, so a row already placed keeps its answer — and re-running after
+    adding a town to `places` picks up whatever was left unplaced last time.
+    """
+    rows = conn.execute(
+        "SELECT id, source, location FROM jobs WHERE country IS NULL"
+    ).fetchall()
+    filled = 0
+    for row in rows:
+        code = places.country(row["source"], row["location"])
+        if not code:
+            continue
+        conn.execute(
+            "UPDATE jobs SET country = :country WHERE id = :id",
+            {"country": code, "id": row["id"]},
+        )
+        filled += 1
+    conn.commit()
+    print(f"country: {filled}/{len(rows)} rows placed")
+
+
+def migrate_countries(conn):
+    """Fill `jobs.countries`, the packed set, for rows that predate the column.
+
+    Unlike the backfills around it this also rewrites `country` — because the
+    two columns are **one derivation** and a row holding the old first-match
+    answer next to the new set is the bug, not a migration of it: a posting
+    hiring across "LATAM, Europe, USA, Canada, APAC" was stored `US`, and a
+    card reading "United States +4" would be as wrong as the filter used to
+    be. Nothing user-owned moves — `country` is derived from columns the row
+    already carries.
+
+    Idempotent: it only looks at rows whose set is still NULL, so a second run
+    finds none. A row whose text places nothing today keeps whatever `country`
+    it has and gets a set of just that, so an old pattern's answer is packed
+    rather than thrown away.
+    """
+    rows = conn.execute(
+        "SELECT id, source, location, country FROM jobs WHERE countries IS NULL"
+    ).fetchall()
+    filled = repointed = 0
+    for row in rows:
+        found = places.codes(row["source"], row["location"])
+        if not found:
+            found = (row["country"],) if row["country"] else ()
+        packed = places.pack(found)
+        if not packed:
+            continue
+        primary = places.primary(found)
+        conn.execute(
+            "UPDATE jobs SET country = :country, countries = :countries WHERE id = :id",
+            {"country": primary, "countries": packed, "id": row["id"]},
+        )
+        filled += 1
+        repointed += primary != row["country"]
+    conn.commit()
+    print(f"countries: {filled}/{len(rows)} rows packed "
+          f"({repointed} whose printed country moved)")
 
 
 def update_enabled_sources(conn, user_id):
@@ -316,6 +378,8 @@ def main():
 
     backfill_posted(conn)
     backfill_salary(conn)
+    backfill_country(conn)
+    migrate_countries(conn)
     update_enabled_sources(conn, user_id)
 
     after = {

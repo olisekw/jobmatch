@@ -61,11 +61,17 @@ services:
       # Belt and braces: wsgi.py never starts the worker thread, and this makes
       # a config mistake unable to change that.
       SCAN_IN_PROCESS: "false"
+      # Both containers write to the same `docker compose logs` stream, so the
+      # lines say which one they came from and are parseable when interleaved.
+      JOBMATCH_COMPONENT: web
+      LOG_FORMAT: json
     expose:
       - "8000"
     healthcheck:
-      # The login page is the one route that answers without a session.
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8000/login').read()\""]
+      # /healthz is public and queries the database, so an unhealthy `web` here
+      # means something a page load would actually have hit. urlopen raises on
+      # the 503 it answers with when Postgres is gone, which is the point.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz').read()\""]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -74,6 +80,11 @@ services:
   worker:
     <<: *app
     command: ["python3", "-m", "jobmatch.worker"]
+    environment:
+      DATABASE_URL: postgresql://jobmatch:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/jobmatch
+      DATA_DIR: /app/data
+      JOBMATCH_COMPONENT: worker
+      LOG_FORMAT: json
     # The same image `web` just built — local only, never on a registry, so say
     # so rather than have compose try to pull `jobmatch:latest` from Docker Hub.
     pull_policy: never

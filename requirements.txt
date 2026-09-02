@@ -9,6 +9,9 @@ sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.9
 python-dotenv>=1.0.0
 gunicorn>=22.0.0
+# Error reporting. Inert without SENTRY_DSN, and `jobmatch.obs` treats even the
+# import as optional — a crash reporter must never be what stops the app booting.
+sentry-sdk>=2.0.0
 playwright>=1.40.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0

@@ -121,6 +121,9 @@ class KarieraSource(JobSource):
             # last page reached: fewer than a full page of offers listed
             soup = BeautifulSoup(html, "lxml")
             total_offers = len(soup.select("div.offer")) - len(soup.select("div.offer.highlight"))
+            # What the board showed us, whether or not any of it was new — the
+            # number the orchestrator judges "this adapter still works" on.
+            ctx.seen(total_offers)
             if total_offers < PER_PAGE or (matched == 0 and pg > 0):
                 break
             if not ctx.sleep(2.0, 5.0):

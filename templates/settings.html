@@ -31,10 +31,19 @@
     </div>
   </div>
   <div class="mt">
+    <label>Where you can work <span class="hint">work permit, not commute — this is what decides whether a remote job counts as a fit</span></label>
+    <div class="chip-row" id="region-chips"></div>
+    <p class="hint" id="region-hint"></p>
+  </div>
+
+  <div class="mt">
     <label>Your skills <span class="hint">comma-separated; auto-filled from your CV</span></label>
     <textarea id="s-skills" rows="3"></textarea>
   </div>
-  <button class="btn mt" id="save-profile">Save profile</button>
+  <div class="save-row">
+    <button class="btn mt" id="save-profile">Save profile</button>
+    <p class="save-note" id="note-profile" role="status" hidden></p>
+  </div>
 </div>
 
 <h2>Matching</h2>
@@ -55,7 +64,10 @@
     <input type="checkbox" id="s-strict">
     <label for="s-strict" style="margin:0">Strict seniority — a job at a different level scores zero</label>
   </div>
-  <button class="btn mt" id="save-matching">Save matching rules</button>
+  <div class="save-row">
+    <button class="btn mt" id="save-matching">Save matching rules</button>
+    <p class="save-note" id="note-matching" role="status" hidden></p>
+  </div>
 </div>
 
 <h2>Scanning</h2>
@@ -78,7 +90,23 @@
       <div id="source-checks"></div>
     </div>
   </div>
-  <button class="btn mt" id="save-scan">Save scan settings</button>
+  <div class="save-row">
+    <button class="btn mt" id="save-scan">Save scan settings</button>
+    <p class="save-note" id="note-scan" role="status" hidden></p>
+  </div>
+</div>
+
+<h2>Notifications</h2>
+<div class="panel">
+  <div class="check-row">
+    <input type="checkbox" id="s-digest">
+    <label for="s-digest" style="margin:0">Email me new matches</label>
+  </div>
+  <p class="hint" id="digest-hint"></p>
+  <div class="save-row">
+    <button class="btn mt" id="save-digest">Save notifications</button>
+    <p class="save-note" id="note-digest" role="status" hidden></p>
+  </div>
 </div>
 
 <h2>Account</h2>
@@ -92,7 +120,7 @@
     <div>
       <label for="delete-password">Your password, to confirm</label>
       <input type="password" id="delete-password" autocomplete="current-password">
-      <p class="form-error" id="delete-error" style="display:none"></p>
+      <p class="form-error" id="delete-error" role="alert" hidden></p>
     </div>
   </div>
   <button class="btn mt" id="delete-account">Delete my account</button>
@@ -103,12 +131,20 @@
 <script>
 let settings;
 
+/* Rendered through tojson rather than pasted into the string: an address is
+   user input, and a JS literal is the one place it must not be spliced raw. */
+const DIGEST_TO = {{ current_user.email | tojson }};
+
 function bindRange(id, value, format) {
   const input = document.getElementById(id);
   const out = document.getElementById(`${id}-out`);
   input.value = value;
   out.textContent = format(value);
   input.addEventListener("input", () => out.textContent = format(input.value));
+}
+
+function sameSet(a, b) {
+  return a.length === b.length && a.every(v => b.includes(v));
 }
 
 function fillSelect(id, choices, current) {
@@ -118,8 +154,48 @@ function fillSelect(id, choices, current) {
     ).join("");
 }
 
+/* "Where I can work" is the one setting with two states behind it: what you
+   picked, and what we derived from your town because you picked nothing. The
+   chips always show what scoring actually uses (`effective_regions`), and the
+   hint says which of the two you are looking at — a picker that sat empty while
+   scores clearly came from somewhere would be the confusing version. */
+function derivedRegions() {
+  return (settings.user_regions || []).length === 0;
+}
+
+function pickedRegions() {
+  return [...document.querySelectorAll("#region-chips .chip.active")].map(c => c.dataset.code);
+}
+
+function renderRegions() {
+  const active = new Set(settings.effective_regions || []);
+  document.getElementById("region-chips").innerHTML =
+    (settings.work_options || []).map(o =>
+      `<button type="button" class="chip ${active.has(o.value) ? "active" : ""}"
+               aria-pressed="${active.has(o.value)}"
+               data-code="${esc(o.value)}">${esc(o.label)}</button>`).join("");
+  document.getElementById("region-hint").textContent = active.size === 0
+    ? "Nothing set, so remote jobs are scored without a location — pick the places you can take a job in."
+    : derivedRegions()
+      ? "Taken from your location. Change any of these and it stops following it."
+      : "Your own choice. Clear them all to go back to following your location.";
+}
+
+document.getElementById("region-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  const on = !chip.classList.contains("active");
+  chip.classList.toggle("active", on);
+  chip.setAttribute("aria-pressed", String(on));
+});
+
 async function init() {
-  settings = await api("/api/settings");
+  try {
+    settings = await api("/api/settings");
+  } catch (err) {
+    toast(err.message);
+    return;
+  }
 
   document.getElementById("s-location").value = settings.user_location || "";
   // Both lists are worded by the server, so "Mid-level" here and on a job card
@@ -127,6 +203,7 @@ async function init() {
   fillSelect("s-seniority", settings.seniority_options, settings.user_seniority);
   fillSelect("s-worktype", settings.worktype_options, settings.user_worktype);
   document.getElementById("s-skills").value = (settings.user_skills || []).join(", ");
+  renderRegions();
 
   bindRange("s-threshold", settings.min_match_score, v => `${v}%`);
   bindRange("w-skill", Math.round(settings.weight_skill * 100), v => `${v}`);
@@ -140,7 +217,9 @@ async function init() {
 
   document.getElementById("profile-chips").innerHTML =
     Object.keys(settings.search_profiles).map(name =>
-      `<button class="chip ${name === settings.active_profile ? "active" : ""}" data-profile="${esc(name)}">${esc(settings.profile_labels[name] || name)}</button>`
+      `<button type="button" class="chip ${name === settings.active_profile ? "active" : ""}"
+                aria-pressed="${name === settings.active_profile}"
+                data-profile="${esc(name)}">${esc(settings.profile_labels[name] || name)}</button>`
     ).join("");
 
   document.getElementById("source-checks").innerHTML =
@@ -151,6 +230,18 @@ async function init() {
         <label for="src-${esc(name)}" style="margin:0">${esc(label)}</label>
       </div>`).join("");
 
+  const digestBox = document.getElementById("s-digest");
+  digestBox.checked = !!settings.digest_enabled;
+  // The preference and the deployment are two different reasons for silence,
+  // and a checkbox that saves happily while nothing ever arrives is the worst
+  // of them — so the hint says which one is in play.
+  digestBox.disabled = !settings.digest_available;
+  document.getElementById("digest-hint").textContent = settings.digest_available
+    ? `At most one email every ${settings.digest_interval_hours} h to ${DIGEST_TO}, `
+      + `listing jobs above your minimum match score that you have not been sent `
+      + `before. Nothing goes out when there is nothing new.`
+    : "This instance has no mail server configured, so no email can be sent from it.";
+
   if (settings.resume_text) {
     document.getElementById("resume-state").textContent =
       `Your CV is loaded — ${plural((settings.user_skills || []).length, "skill")} in your profile. `
@@ -158,24 +249,47 @@ async function init() {
   }
 }
 
-async function save(payload, message) {
+let noteTimers = {};
+
+/* The message belongs beside the button that caused it. A toast for a form
+   error means reading it in the corner of the screen, three seconds, once. */
+function note(key, message, ok) {
+  const el = document.getElementById(`note-${key}`);
+  el.textContent = message;
+  el.classList.toggle("bad", !ok);
+  el.hidden = false;
+  clearTimeout(noteTimers[key]);
+  if (ok) noteTimers[key] = setTimeout(() => { el.hidden = true; }, 6000);
+}
+
+async function save(key, payload, message) {
+  const button = document.getElementById(`save-${key}`);
+  button.disabled = true;
+  note(key, "Saving…", true);
   try {
     const res = await api("/api/settings", { method: "PUT", json: payload });
-    toast(message + (res.rescored ? " Every job was rescored." : ""));
+    note(key, message + (res.rescored ? " Every job was rescored." : ""), true);
     settings = await api("/api/settings");
   } catch (err) {
-    toast(err.message);
+    note(key, err.message, false);
+  } finally {
+    button.disabled = false;
   }
 }
 
-document.getElementById("save-profile").addEventListener("click", () => save({
+document.getElementById("save-profile").addEventListener("click", () => save("profile", {
   user_location: document.getElementById("s-location").value.trim().toLowerCase(),
+  /* Saving the profile without touching the chips must not quietly pin the
+     derived answer — otherwise moving to Vienna next month would leave the old
+     country behind. So an untouched derived set is stored as "still derived". */
+  user_regions: sameSet(pickedRegions(), settings.effective_regions || []) && derivedRegions()
+    ? [] : pickedRegions(),
   user_seniority: document.getElementById("s-seniority").value,
   user_worktype: document.getElementById("s-worktype").value,
   user_skills: document.getElementById("s-skills").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
 }, "Profile saved."));
 
-document.getElementById("save-matching").addEventListener("click", () => save({
+document.getElementById("save-matching").addEventListener("click", () => save("matching", {
   min_match_score: Number(document.getElementById("s-threshold").value),
   weight_skill: Number(document.getElementById("w-skill").value) / 100,
   weight_worktype: Number(document.getElementById("w-worktype").value) / 100,
@@ -184,7 +298,11 @@ document.getElementById("save-matching").addEventListener("click", () => save({
   seniority_strict: document.getElementById("s-strict").checked,
 }, "Matching rules saved."));
 
-document.getElementById("save-scan").addEventListener("click", () => save({
+document.getElementById("save-digest").addEventListener("click", () => save("digest", {
+  digest_enabled: document.getElementById("s-digest").checked,
+}, "Notification settings saved."));
+
+document.getElementById("save-scan").addEventListener("click", () => save("scan", {
   search_terms: document.getElementById("s-terms").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
   scan_days: Number(document.getElementById("s-days").value) || 0,
   enabled_sources: [...document.querySelectorAll("#source-checks input:checked")].map(c => c.value),
@@ -194,8 +312,10 @@ document.getElementById("save-scan").addEventListener("click", () => save({
 document.getElementById("profile-chips").addEventListener("click", (e) => {
   const chip = e.target.closest(".chip");
   if (!chip) return;
-  document.querySelectorAll("#profile-chips .chip").forEach(c => c.classList.remove("active"));
-  chip.classList.add("active");
+  document.querySelectorAll("#profile-chips .chip").forEach(c => {
+    c.classList.toggle("active", c === chip);
+    c.setAttribute("aria-pressed", c === chip ? "true" : "false");
+  });
   document.getElementById("s-terms").value =
     settings.search_profiles[chip.dataset.profile].join(", ");
 });
@@ -240,7 +360,7 @@ document.getElementById("delete-account").addEventListener("click", async () => 
   const errorEl = document.getElementById("delete-error");
   const show = (message) => {
     errorEl.textContent = message;
-    errorEl.style.display = message ? "" : "none";
+    errorEl.hidden = !message;
   };
   show("");
   if (!passwordEl.value) return show("Enter your password to confirm.");

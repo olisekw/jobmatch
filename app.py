@@ -32,13 +32,25 @@ from flask_wtf.csrf import CSRFError, CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
-from jobmatch import auth, dates, db, display, resume, salary, scan, scoring, worker
+from jobmatch import (
+    auth,
+    dates,
+    db,
+    demo,
+    digest,
+    display,
+    obs,
+    places,
+    resume,
+    salary,
+    scan,
+    scoring,
+    worker,
+)
 from jobmatch.sources import SOURCES
 
-logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+obs.setup_logging(component="web")
+obs.init_sentry()
 log = logging.getLogger("jobmatch")
 
 app = Flask(__name__)
@@ -143,11 +155,17 @@ def bootstrap_db():
 
 WEIGHT_KEYS = ("weight_skill", "weight_worktype", "weight_location", "weight_seniority")
 RESCORE_KEYS = WEIGHT_KEYS + (
-    "user_location", "user_seniority", "user_worktype", "user_skills", "seniority_strict",
+    "user_location", "user_regions", "user_seniority", "user_worktype", "user_skills",
+    "seniority_strict",
 )
 APPLICATION_STATUSES = db.APPLICATION_STATUSES
-JOB_LIMIT = 500  # one page of results; the client says so when it bites
+JOB_LIMIT = 500   # the most rows one request may ask for
+PAGE_SIZE = 50    # what it gets when it does not ask — one screenful, then "Load more"
 PDF_MAGIC = b"%PDF-"  # every PDF starts with it; a renamed .exe does not
+# The one country-filter value that is not a place: "wherever I can work",
+# expanded per user from their `user_regions`. Not a code, so it cannot collide
+# with one — `places.LABELS` is all uppercase.
+REACHABLE = "reachable"
 
 
 def get_db():
@@ -194,7 +212,66 @@ def template_globals():
         # Who may trigger the shared crawl, and how often it happens anyway.
         "can_scan": config.SCAN_ENABLED and getattr(current_user, "is_admin", False),
         "scan_interval_hours": config.SCAN_INTERVAL_HOURS if config.SCAN_ENABLED else 0,
+        # Whether this instance offers a demo, and whether *this* session is it.
+        "demo_enabled": demo.enabled(),
+        "demo_email": config.DEMO_EMAIL,
+        "demo_password": config.DEMO_PASSWORD,
+        "demo_reset_hours": config.DEMO_RESET_HOURS,
+        "in_demo": in_demo(),
     }
+
+
+def in_demo():
+    """Is the caller signed in as the shared demo account?
+
+    Identity by email rather than a column: the demo is a configuration fact,
+    not a property of a user, and `users` needs no migration to learn about it.
+    """
+    return (
+        demo.enabled()
+        and current_user.is_authenticated
+        and demo.is_demo_email(current_user.email)
+    )
+
+
+def demo_forbidden(what):
+    """The 403 for the two things the shared account may not do."""
+    return jsonify({
+        "error": f"The demo account cannot {what} — it is shared, and it is put "
+                 f"back every {config.DEMO_RESET_HOURS} hours. Sign up for an "
+                 f"account of your own to try it."
+    }), 403
+
+
+# ── Health ───────────────────────────────────────────────────
+
+@app.get("/healthz")
+@limiter.exempt
+def healthz():
+    """Is this instance serving? For an uptime monitor, so it is public.
+
+    Public means it must say nothing an attacker can use: no versions, no
+    counts, no error text. `RELEASE` is the deployed commit, which is on
+    GitHub anyway and is the one thing worth knowing when a deploy goes out.
+
+    The check is a real query, not `return "ok"` — the failure this exists to
+    catch is a web container that is up while Postgres is not, which answers
+    every page with a 500 and every naive health check with a 200.
+    """
+    checks = {"database": "ok"}
+    status = 200
+    try:
+        get_db().scalar("SELECT 1")
+    except Exception:
+        # Logged with the traceback, reported as one word.
+        log.exception("healthz: the database is not answering")
+        checks["database"] = "error"
+        status = 503
+    return jsonify({
+        "status": "ok" if status == 200 else "error",
+        "release": config.RELEASE,
+        "checks": checks,
+    }), status
 
 
 # ── Auth ─────────────────────────────────────────────────────
@@ -303,7 +380,9 @@ def page_signup():
         else:
             # Whoever gets there first owns the instance; on the migrated local
             # DB that slot is already taken, so signups land as regular users.
-            first = db.default_user_id(conn) is None
+            # Asked as "is there an admin?", not "is the table empty?" — a
+            # seeded demo account is a user and is deliberately not an admin.
+            first = not db.has_admin(conn)
             user_id = db.create_user(
                 conn, email, auth.hash_password(password), is_admin=first
             )
@@ -330,6 +409,31 @@ def _start_session(conn, row, password):
     db.ensure_user_jobs(conn, row["id"])
 
 
+@app.post("/demo")
+@limiter.limit("30 per hour")
+def do_demo_login():
+    """Sign in as the shared demo account — one click, no password to type.
+
+    A POST with a CSRF token rather than a link: it starts a session, and a
+    GET that logs somebody in can be triggered from any page on the internet.
+    The password still works at the normal login form; it is on the landing
+    page, because it is not protecting anything.
+    """
+    if not demo.enabled():
+        flash("This instance does not have a demo account.")
+        return redirect(url_for("page_login"))
+    conn = get_db()
+    # Seeded here if the worker has not come round yet — a box that went up ten
+    # minutes ago still has to answer the link on its own landing page.
+    row = demo.ensure_seeded(conn)
+    if row is None:
+        flash("The demo account could not be prepared — try again in a minute.")
+        return redirect(url_for("page_login"))
+    _start_session(conn, row, config.DEMO_PASSWORD)
+    log.info("demo sign-in (user %d)", row["id"])
+    return redirect(url_for("page_dashboard"))
+
+
 @app.post("/logout")
 @login_required
 def do_logout():
@@ -348,6 +452,9 @@ def api_account_delete():
     goes with the rows. Deliberately irreversible: no soft-delete flag, nothing
     left behind but the shared `jobs` pool, which was never this user's.
     """
+    if in_demo():
+        # Everybody else's demo, not this visitor's account to end.
+        return demo_forbidden("be deleted")
     conn = get_db()
     user_id = current_user_id()
     password = (request.get_json(silent=True) or {}).get("password") or ""
@@ -375,8 +482,17 @@ def api_account_delete():
 # ── Pages ────────────────────────────────────────────────────
 
 @app.route("/")
-@login_required
 def page_dashboard():
+    """The dashboard, or — to somebody who has never signed in — the front door.
+
+    Deliberately one route rather than two. `/` is the URL that gets shared,
+    bookmarked and put on a CV, and sending a logged-out visitor from it to a
+    login form is how a public instance reads as a private tool. The view
+    function keeps its name so every `url_for("page_dashboard")` still means
+    "wherever home is for this caller".
+    """
+    if not current_user.is_authenticated:
+        return render_template("landing.html")
     return render_template("dashboard.html", active="dashboard")
 
 
@@ -384,6 +500,14 @@ def page_dashboard():
 @login_required
 def page_jobs():
     return render_template("jobs.html", active="jobs")
+
+
+@app.route("/jobs/<int:job_id>")
+@login_required
+def page_job(job_id):
+    """The posting itself. The row is fetched by the page's own JSON call, so a
+    job that vanished shows this page's error state rather than a Flask 404."""
+    return render_template("job.html", active="jobs", job_id=job_id)
 
 
 @app.route("/tracker")
@@ -444,14 +568,93 @@ def api_scan_cancel():
 
 # ── Jobs ─────────────────────────────────────────────────────
 
-@app.get("/api/jobs")
-@login_required
-def api_jobs():
-    conn = get_db()
+JOB_COLUMNS = """j.id, j.source, j.source_id, j.title, j.company, j.location,
+                 j.salary, j.freshness, j.link, j.skills, j.worktype, j.seniority,
+                 j.employment_type, j.scraped_at, j.posted_at, j.salary_min,
+                 j.salary_max, j.salary_currency, j.salary_period, j.country,
+                 j.countries,
+                 uj.status, uj.match_score, uj.score_breakdown"""
+
+# What the Pay filter offers: a floor in euros an hour, which is the one scale
+# `salary.HOURLY_EUR_SQL` puts every posting on. The floors used to be read in
+# each job's own currency, which was honest only while the pool was euros and
+# dollars; a 40 000 Kč month cleared "50+ an hour" against a real rate of about
+# €10. The label carries the currency and comes from the server, like every
+# other word a page prints for a stored value.
+PAY_FLOORS = (10, 20, 30, 50)
+
+
+def _pay_floor_options():
+    return [{"value": floor,
+             "label": f"{salary.COMPARISON_SYMBOL}{floor}+ an hour"}
+            for floor in PAY_FLOORS]
+
+
+def _job_payload(row):
+    """One `jobs`+`user_jobs` row as the client wants to read it.
+
+    Shared by the list and the detail endpoint so a job never words itself two
+    ways depending on which page is showing it.
+    """
+    job = dict(row)
+    job["score_breakdown"] = (
+        json.loads(job["score_breakdown"]) if job["score_breakdown"] else None
+    )
+    job["source_label"] = getattr(SOURCES.get(job["source"]), "label", job["source"])
+    job["posted_days_ago"] = dates.days_ago(job["posted_at"])
+    # The client renders these as-is; `freshness` stays out of the UI because
+    # it is raw board text ("pred 3 dňami") that dates.py has already parsed.
+    job["posted_display"] = display.relative_date(job["posted_at"])
+    job["posted_exact"] = display.exact_time(job["posted_at"])
+    job["status_label"] = display.label(display.JOB_STATUS, job["status"])
+    job["worktype_label"] = display.label(display.WORKTYPE, job["worktype"])
+    job["seniority_label"] = display.label(display.SENIORITY, job["seniority"])
+    job["employment_label"] = display.label(
+        display.EMPLOYMENT_TYPE, job["employment_type"]
+    )
+    # The comparable figure, always in euros — the same number the pay filter
+    # selects on and the "Best pay" sort orders by. A posting the board quoted
+    # in another currency carries the sentence saying what it was converted at,
+    # because a euro sign appearing beside a Kč range with nothing behind it is
+    # the chip that reads as a wrong answer rather than an approximate one.
+    job["salary_hourly"] = salary.hourly_display(
+        job["salary_min"], job["salary_max"],
+        job["salary_currency"], job["salary_period"],
+    )
+    job["salary_hourly_title"] = (
+        salary.conversion_note(job["salary_currency"]) if job["salary_hourly"] else ""
+    ) or ""
+    # The pay as one string, built from the structured columns rather than the
+    # board's own wording, so "od 1680 eur/mesiac" and "$70k - $90k" line up in
+    # the same list. None means the posting quoted nothing — which the card
+    # says out loud, because a blank there reads as "we forgot to show it".
+    job["salary_display"] = salary.range_display(
+        job["salary_min"], job["salary_max"],
+        job["salary_currency"], job["salary_period"],
+    ) or (job["salary"] or None)
+    # One chip, and it says how many places it is standing for: a posting
+    # hiring across LATAM, Europe, the US, Canada and APAC prints "Europe +4"
+    # rather than picking one of the five and reading as the only one. The
+    # wording is here, server-side, like every other label a card shows.
+    job["country_label"] = places.label(job["country"])
+    job["country_title"] = ""
+    named = places.stored_codes(job["countries"], job["country"])
+    if job["country_label"] and len(named) > 1:
+        job["country_label"] += f" +{len(named) - 1}"
+        rest = sorted((c for c in named if c != job["country"]), key=places.label)
+        job["country_title"] = ", ".join(
+            places.label(code) for code in [job["country"], *rest])
+    return job
+
+
+def _job_filters():
+    """The WHERE fragments and binds shared by the list query and its COUNT."""
     status = request.args.get("status", "new")
     source = request.args.get("source", "")
+    worktype = request.args.get("worktype", "")
+    country = request.args.get("country", "")
+    pay = request.args.get("pay", "")
     q = request.args.get("q", "").strip().lower()
-    sort = request.args.get("sort", "score")
     try:
         min_score = float(request.args.get("min_score"))
     except (TypeError, ValueError):
@@ -464,54 +667,135 @@ def api_jobs():
     if source:
         where.append("j.source = :source")
         params["source"] = source
+    if worktype in display.WORKTYPE:
+        where.append("j.worktype = :worktype")
+        params["worktype"] = worktype
+    if country == REACHABLE:
+        # "Somewhere I can work" is one filter over the same expansion the
+        # scorer uses, so the list and the score cannot disagree about which
+        # countries those are. A user who has answered nothing expands to
+        # nothing, and an empty IN-list would empty the page — so, like every
+        # other unrecognised filter value here, it is ignored rather than obeyed.
+        codes = places.reachable_codes(db.user_regions(db.get_all_settings(
+            get_db(), current_user_id())))
+        if codes:
+            # An overlap between two sets, which is what the scorer asks too —
+            # a posting naming five places is reachable from any of them.
+            binds = {f"reach{i}": places.token(code)
+                     for i, code in enumerate(sorted(codes))}
+            clauses = " OR ".join(
+                f"{places.COUNTRIES_SQL} LIKE :{name}" for name in binds)
+            where.append(f"({clauses})")
+            params.update(binds)
+    elif country in places.LABELS:
+        # Literal, not expanded: picking "Germany" asks for postings that say
+        # Germany, and the expansion is what the entry above it is for.
+        where.append(f"{places.COUNTRIES_SQL} LIKE :country")
+        params["country"] = places.token(country)
+    # "listed" is the useful half of this filter — most postings quote nothing,
+    # and hiding those is what makes the rest comparable. A floor is the same
+    # question asked harder, and NULL fails the comparison, so it implies it.
+    # The floor compares against the *top* of a range: "could this job pay me
+    # 20 an hour?", which is the question somebody setting a floor is asking.
+    if pay == "listed":
+        where.append("(j.salary_min IS NOT NULL OR j.salary_max IS NOT NULL)")
+    elif pay.isdigit() and int(pay) in PAY_FLOORS:
+        where.append(f"{salary.HOURLY_EUR_SQL} >= :min_hourly")
+        params["min_hourly"] = float(pay)
     if q:
         where.append("(LOWER(j.title) LIKE :q OR LOWER(j.company) LIKE :q)")
         params["q"] = f"%{q}%"
     if min_score is not None:
         where.append("uj.match_score IS NOT NULL AND uj.match_score >= :min_score")
         params["min_score"] = min_score
+    return " AND ".join(where), params
 
-    order = db.JOB_ORDER["date" if sort == "date" else "score"]
+
+def _page_window():
+    """`limit`/`offset` from the query string, clamped to something sane.
+
+    A hostile or careless `limit=999999` is a table scan served to one caller,
+    so the ceiling is `JOB_LIMIT` whatever was asked for.
+    """
+    def number(name, default):
+        try:
+            return max(0, int(request.args.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    return min(number("limit", PAGE_SIZE) or PAGE_SIZE, JOB_LIMIT), number("offset", 0)
+
+
+@app.get("/api/jobs")
+@login_required
+def api_jobs():
+    conn = get_db()
+    sort = request.args.get("sort", "score")
+    where, params = _job_filters()
+    limit, offset = _page_window()
+
+    total = conn.scalar(
+        f"""SELECT COUNT(*) FROM jobs j
+            JOIN user_jobs uj ON uj.job_id = j.id AND uj.user_id = :user_id
+            WHERE {where}""",
+        params,
+    )
+    order = db.JOB_ORDER.get(sort, db.JOB_ORDER["score"])
     rows = conn.execute(
-        f"""SELECT j.id, j.source, j.source_id, j.title, j.company, j.location,
-                   j.salary, j.freshness, j.link, j.skills, j.worktype, j.seniority,
-                   j.employment_type, j.scraped_at, j.posted_at, j.salary_min,
-                   j.salary_max, j.salary_currency, j.salary_period,
-                   uj.status, uj.match_score, uj.score_breakdown
+        f"""SELECT {JOB_COLUMNS}
             FROM jobs j
             JOIN user_jobs uj ON uj.job_id = j.id AND uj.user_id = :user_id
-            WHERE {' AND '.join(where)}
-            ORDER BY {order} LIMIT {JOB_LIMIT}""",
-        params,
+            WHERE {where}
+            ORDER BY {order} LIMIT :limit OFFSET :offset""",
+        dict(params, limit=limit, offset=offset),
     ).fetchall()
 
-    jobs = []
-    for row in rows:
-        job = dict(row)
-        job["score_breakdown"] = (
-            json.loads(job["score_breakdown"]) if job["score_breakdown"] else None
-        )
-        job["source_label"] = getattr(SOURCES.get(job["source"]), "label", job["source"])
-        job["posted_days_ago"] = dates.days_ago(job["posted_at"])
-        # The client renders these as-is; `freshness` stays out of the UI because
-        # it is raw board text ("pred 3 dňami") that dates.py has already parsed.
-        job["posted_display"] = display.relative_date(job["posted_at"])
-        job["posted_exact"] = display.exact_time(job["posted_at"])
-        job["worktype_label"] = display.label(display.WORKTYPE, job["worktype"])
-        job["seniority_label"] = display.label(display.SENIORITY, job["seniority"])
-        job["employment_label"] = display.label(
-            display.EMPLOYMENT_TYPE, job["employment_type"]
-        )
-        job["salary_hourly"] = salary.hourly_display(
-            job["salary_min"], job["salary_max"],
-            job["salary_currency"], job["salary_period"],
-        )
-        jobs.append(job)
+    jobs = [_job_payload(row) for row in rows]
     return jsonify({
         "jobs": jobs,
         "count": len(jobs),
-        "truncated": len(jobs) == JOB_LIMIT,
+        "total": total,
+        "offset": offset,
+        "has_more": offset + len(jobs) < total,
+        # Kept for older callers: there is real paging behind the cut now.
+        "truncated": offset + len(jobs) < total,
     })
+
+
+@app.get("/api/jobs/<int:job_id>")
+@login_required
+def api_job(job_id):
+    """One job in full — including the scraped description no list ships."""
+    conn = get_db()
+    user_id = current_user_id()
+
+    def fetch():
+        return conn.execute(
+            f"""SELECT {JOB_COLUMNS}, j.description
+                FROM jobs j
+                JOIN user_jobs uj ON uj.job_id = j.id AND uj.user_id = :user_id
+                WHERE j.id = :job_id""",
+            {"user_id": user_id, "job_id": job_id},
+        ).fetchone()
+
+    row = fetch()
+    if row is None:
+        # Either the job does not exist, or this user has no `user_jobs` row for
+        # it yet — a job scanned in since they signed up. Materializing is
+        # idempotent and turns the second case into a hit, the same way
+        # `api_job_status` handles it.
+        if conn.scalar("SELECT id FROM jobs WHERE id = :job_id", {"job_id": job_id}) is None:
+            return jsonify({"error": "That job is no longer in your list."}), 404
+        db.ensure_user_jobs(conn, user_id)
+        conn.commit()
+        row = fetch()
+        if row is None:
+            return jsonify({"error": "That job is no longer in your list."}), 404
+
+    job = _job_payload(row)
+    job["scraped_display"] = display.relative_time(job["scraped_at"])
+    job["scraped_exact"] = display.exact_time(job["scraped_at"])
+    return jsonify({"job": job})
 
 
 @app.post("/api/jobs/<int:job_id>/status")
@@ -647,17 +931,63 @@ def api_settings_get():
     settings = db.get_all_settings(conn, current_user_id())
     settings["search_profiles"] = config.SEARCH_PROFILES
     settings["available_sources"] = {name: s.label for name, s in SOURCES.items()}
+    # What the Jobs filters can actually offer. Countries come from the pool
+    # rather than from `places.LABELS`: a dropdown listing forty countries that
+    # match nothing is worse than no dropdown, and which boards are enabled
+    # decides what is really in there.
+    # Read from the packed sets, not from the printed code: a posting that
+    # says "Europe, USA" prints one of the two, and a country the pool can
+    # actually be filtered down to belongs in the dropdown that filters it.
+    pool_countries = sorted({
+        code
+        for row in conn.execute(
+            "SELECT DISTINCT country, countries FROM jobs WHERE country IS NOT NULL"
+        )
+        for code in places.stored_codes(row["countries"], row["country"])
+    })
+    settings["available_countries"] = places.options(pool_countries)
+    # "Somewhere I can work" leads the country filter — it is the question most
+    # people are actually asking a job list, and it is one entry instead of
+    # thirty. Only offered when the user has an answer to expand, because the
+    # server ignores a filter it cannot honour and a dead option is worse than
+    # a missing one. The wording is here rather than in the page, like every
+    # other label a filter shows.
+    if db.user_regions(settings):
+        settings["available_countries"].insert(
+            0, {"value": REACHABLE, "label": "Somewhere I can work"}
+        )
+    # What the scorer will actually use — derived from the user's town when they
+    # have not answered, so Settings can say so instead of showing an empty
+    # picker next to scores that clearly came from somewhere.
+    settings["effective_regions"] = sorted(db.user_regions(settings))
+    # The "where I can work" picker: every region, plus the countries the pool
+    # holds, plus every code the answer above contains. That last part is not
+    # optional — the picker shows the effective answer as its active chips, so a
+    # code with no chip to sit on would be an answer the user can see the effect
+    # of and cannot see, and saving the profile would quietly drop it.
+    settings["work_options"] = places.work_options(
+        pool_countries, settings["effective_regions"]
+    )
+    settings["pay_floors"] = _pay_floor_options()
     # Labels live in one place; the pages that need a <select> or a chip read
     # them from here rather than keeping their own copy.
     settings["profile_labels"] = {
         name: display.label(display.SEARCH_PROFILE, name) for name in config.SEARCH_PROFILES
     }
+    # The tracker's tabs and their dropdown, from one definition — see
+    # display.APPLICATION_GROUPS for why "waiting" is two stored statuses.
+    settings["application_groups"] = display.application_groups()
     settings["application_statuses"] = [
         {"value": s, "label": display.label(display.APPLICATION_STATUS, s)}
         for s in APPLICATION_STATUSES
     ]
     settings["seniority_options"] = display.options(display.SENIORITY)
     settings["worktype_options"] = display.options(display.WORKTYPE)
+    # Whether the *instance* can send mail at all. The per-user `digest_enabled`
+    # above is a preference; this is a fact about the deployment, and Settings
+    # says which of the two is why no email arrives.
+    settings["digest_available"] = digest.enabled()
+    settings["digest_interval_hours"] = config.DIGEST_INTERVAL_HOURS
     return jsonify(settings)
 
 
@@ -696,6 +1026,11 @@ def api_settings_put():
         except (TypeError, ValueError):
             return jsonify({"error": "The minimum match score needs to be a number."}), 400
 
+    if "digest_enabled" in updates:
+        # A checkbox arrives as a bool; anything else is coerced rather than
+        # stored, so `"false"` can never come back out as a truthy string.
+        updates["digest_enabled"] = bool(updates["digest_enabled"])
+
     if "search_terms" in updates:
         updates["search_terms"] = [
             str(t).strip() for t in updates["search_terms"] if str(t).strip()
@@ -706,6 +1041,15 @@ def api_settings_put():
         )
     if "enabled_sources" in updates:
         updates["enabled_sources"] = [s for s in updates["enabled_sources"] if s in SOURCES]
+    if "user_regions" in updates:
+        # Codes only, and only ones `places` knows — the scorer expands this into
+        # a membership test, and a code it cannot place would just be a silent
+        # zero. Empty is a legitimate answer: it means "not answered", and
+        # `db.user_regions` falls back to deriving it from the user's town.
+        updates["user_regions"] = sorted(
+            {str(c).strip().upper() for c in (updates["user_regions"] or [])}
+            & set(places.LABELS)
+        )
 
     db.set_settings(conn, user_id, updates)
 
@@ -723,6 +1067,9 @@ def api_settings_put():
 @app.post("/api/resume")
 @login_required
 def api_resume():
+    if in_demo():
+        # A public PDF drop box, and the seeded skills are what the demo is for.
+        return demo_forbidden("have its CV replaced")
     conn = get_db()
     user_id = current_user_id()
     file = request.files.get("resume")

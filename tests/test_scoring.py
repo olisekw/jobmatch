@@ -11,32 +11,47 @@ Run from the repo root:  python3 -m unittest discover -s tests -t .
 
 import unittest
 
-from jobmatch import scoring
+from jobmatch import places, scoring
 
 WEIGHTS_EQUAL = {"skills": 1.0, "worktype": 1.0, "location": 1.0, "seniority": 1.0}
 
 
 def make_job(description="Python developer wanted.", skills="",
-             worktype=None, location=None, seniority=None):
-    """A job in the dict shape `score_job` reads (mirrors the DB Row columns)."""
+             worktype=None, location=None, seniority=None, country=None,
+             countries=None):
+    """A job in the dict shape `score_job` reads (mirrors the DB Row columns).
+
+    `countries` defaults to the packed form of `country`, which is what a
+    scanned row holds — pass it explicitly for a posting naming several places.
+    """
     return {
         "description": description,
         "skills": skills,
         "worktype": worktype,
         "location": location,
         "seniority": seniority,
+        "country": country,
+        "countries": countries if countries is not None else places.pack([country]),
     }
 
 
 def make_prefs(skills=None, worktype=None, location=None,
-               seniority=None, seniority_strict=False):
-    """User prefs in the shape `db.get_user_prefs` returns (skills is a set)."""
+               seniority=None, seniority_strict=False, regions=None):
+    """User prefs in the shape `db.get_user_prefs` returns (skills is a set).
+
+    `regions` is the codes a user picked; `reachable` is the expansion the
+    scorer actually tests against, built here by the same `places` call
+    `db.get_user_prefs` makes — so a test cannot accidentally assert against a
+    set the app would never produce.
+    """
     return {
         "skills": set(skills or []),
         "worktype": worktype,
         "location": location,
         "seniority": seniority,
         "seniority_strict": seniority_strict,
+        "regions": set(regions or []),
+        "reachable": places.reachable_codes(regions or []),
     }
 
 
@@ -118,11 +133,84 @@ class AdjacencyComponentTests(unittest.TestCase):
 
 
 class LocationComponentTests(unittest.TestCase):
-    def test_remote_job_is_full_location_score(self):
+    """Onsite is a commute; remote is a work permit. Two rules, one component."""
+
+    def test_remote_job_in_a_reachable_country_is_full_score(self):
         _, comp = scoring.score_job(
-            make_job(worktype="remote", location=None),
-            make_prefs(location="bratislava"), WEIGHTS_EQUAL)
+            make_job(worktype="remote", country="SK"),
+            make_prefs(regions=["SK", "EU"]), WEIGHTS_EQUAL)
         self.assertEqual(comp["location"], 1.0)
+
+    def test_remote_job_somewhere_unreachable_is_not(self):
+        # The bug this component was rewritten for: a US-only remote role used
+        # to score full marks for a user in Bratislava, ranking exactly level
+        # with the EU roles it should have been beaten by.
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="US"),
+            make_prefs(regions=["SK", "EU"]), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 0.0)
+
+    def test_remote_job_elsewhere_in_the_region_is_reachable(self):
+        # "Europe" in the preference covers the countries inside it.
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="PT"),
+            make_prefs(regions=["SK", "EU"]), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 1.0)
+
+    def test_job_posted_to_a_whole_region_reaches_a_country_preference(self):
+        # And the expansion runs the other way too: somebody who can only work
+        # in Slovakia is still served by a posting addressed to Europe.
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="EU"),
+            make_prefs(regions=["SK"]), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 1.0)
+
+    def test_worldwide_job_reaches_everybody(self):
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="ANY"),
+            make_prefs(regions=["SK"]), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 1.0)
+
+    def test_a_posting_hiring_in_five_places_is_reachable_from_any_of_them(self):
+        """One overlap is a fit. Storing only the first place a posting named
+        made "LATAM, Europe, USA, Canada, APAC" a `US` job and scored it 0 for
+        a European, which is the job this whole component exists to find."""
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="EU",
+                     countries=places.pack(("US", "CA", "EU", "LATAM", "APAC"))),
+            make_prefs(regions=["SK", "EU"]), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 1.0)
+
+    def test_a_posting_naming_several_unreachable_places_is_still_zero(self):
+        """The fix must not hand everybody every job — a set that overlaps
+        nothing the user can reach is as unreachable as one country was."""
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="US",
+                     countries=places.pack(("US", "CA", "IN"))),
+            make_prefs(regions=["SK", "EU"]), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 0.0)
+
+    def test_a_row_from_before_the_set_column_still_scores(self):
+        """`jobs.countries` is NULL between the column being added and the
+        backfill; a remote job must not go unscored for that window."""
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="PT", countries=None),
+            make_prefs(regions=["SK", "EU"]), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 1.0)
+
+    def test_remote_job_nobody_could_place_is_unknown(self):
+        # Unplaced is not unreachable — an empty bar reads as a zero, so this
+        # has to stay None and be hatched.
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country=None, countries=None),
+            make_prefs(regions=["SK", "EU"]), WEIGHTS_EQUAL)
+        self.assertIsNone(comp["location"])
+
+    def test_remote_job_is_unknown_when_the_user_said_nothing(self):
+        _, comp = scoring.score_job(
+            make_job(worktype="remote", country="US"),
+            make_prefs(location="bratislava"), WEIGHTS_EQUAL)
+        self.assertIsNone(comp["location"])
 
     def test_substring_city_match(self):
         _, comp = scoring.score_job(
@@ -140,6 +228,14 @@ class LocationComponentTests(unittest.TestCase):
         _, comp = scoring.score_job(
             make_job(worktype="onsite", location="Košice"),
             make_prefs(location="bratislava"), WEIGHTS_EQUAL)
+        self.assertEqual(comp["location"], 0.0)
+
+    def test_onsite_is_a_commute_not_a_region(self):
+        # Prague is in Europe and is still not a commute from Bratislava, so
+        # the region rule must not leak into the non-remote branch.
+        _, comp = scoring.score_job(
+            make_job(worktype="onsite", location="Praha", country="CZ"),
+            make_prefs(location="bratislava", regions=["EU"]), WEIGHTS_EQUAL)
         self.assertEqual(comp["location"], 0.0)
 
     def test_unknown_when_no_user_location(self):

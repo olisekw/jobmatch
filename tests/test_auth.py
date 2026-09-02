@@ -125,10 +125,24 @@ class PasswordTests(unittest.TestCase):
 class LoginTests(AuthTestCase):
     def test_pages_redirect_to_login_when_signed_out(self):
         client = webapp.app.test_client()
-        for path in ("/", "/jobs", "/tracker", "/settings"):
+        # `/` is deliberately not in this list — as of Phase 7 it is the public
+        # landing page, which is the next test.
+        for path in ("/jobs", "/tracker", "/settings"):
             res = client.get(path)
             self.assertEqual(res.status_code, 302, path)
             self.assertIn("/login", res.headers["Location"], path)
+
+    def test_the_front_page_greets_a_stranger_instead_of_a_login_form(self):
+        """`/` is the URL that gets shared — it has to say what this is."""
+        client = webapp.app.test_client()
+        res = client.get("/")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_data(as_text=True)
+        self.assertIn("scored against your CV", body)
+        # And signing in still lands on the dashboard behind the same URL.
+        self.make_user("home@example.com")
+        res = self.client_for("home@example.com").get("/")
+        self.assertIn("Best matches right now", res.get_data(as_text=True))
 
     def test_api_answers_401_json_rather_than_redirecting(self):
         # A fetch() following a redirect to an HTML page would report the login

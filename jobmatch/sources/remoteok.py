@@ -2,6 +2,10 @@
 
 GET https://remoteok.com/api returns every live listing (element 0 is a
 legal-notice stub). Salaries are yearly USD numbers; dates are epoch/ISO.
+
+One URL, no query parameters of any kind — not even the search term, which is
+why this adapter filters in Python while the others ask. So `ctx.regions` has
+nothing to narrow: the feed is the whole board or nothing.
 """
 
 import datetime
@@ -22,12 +26,16 @@ class RemoteOkSource(JobSource):
     name = "remoteok"
     label = "Remote OK"
     provides = frozenset({"worktype"})
+    has_detail_page = False   # the feed carries the description
 
     def search(self, page, terms, days, known_ids, ctx):
         ctx.progress(f"Reading the {self.label} feed")
         items = json.loads(http_get(API_URL))
         cutoff = posted_cutoff(days)
         stubs = []
+        # Element 0 is a legal notice, not a job; counting it would make an
+        # empty feed look like a feed with one listing on it.
+        ctx.seen(sum(1 for i in items if isinstance(i, dict) and i.get("id")))
 
         for item in items:
             if ctx.stopped():

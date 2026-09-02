@@ -25,7 +25,7 @@ from datetime import timedelta
 
 import config
 
-from . import dates, db, display, extract, salary, scoring
+from . import dates, db, display, extract, places, salary, scoring
 from .sources import SOURCES, get_enabled
 from .sources.base import ScanContext
 
@@ -205,6 +205,10 @@ class ScanState:
         self.enriched = 0
         self.failed = 0
         self.source_errors = {}   # source name → error text
+        self.source_seen = {}     # source name → listings the board showed us
+        # Where this crawl's users can work — filled in by `_run_scan`, and
+        # handed to every adapter that can narrow its request with it.
+        self.regions = frozenset()
         self.status = "running"   # running | done | failed | cancelled
         self.error = None
         self.stop_requested = False
@@ -251,6 +255,15 @@ class ScanState:
             self.sync()
         return self.stop_requested
 
+    def note_seen(self, name, count):
+        """Listings one source put in front of its adapter, matched or not."""
+        self.source_seen[name] = self.source_seen.get(name, 0) + max(0, int(count or 0))
+
+    def note_problem(self, name, text):
+        """A non-fatal problem. The first one wins — a board that failed on
+        every one of eighteen search terms has one story, not eighteen."""
+        self.source_errors.setdefault(name, text)
+
 
 def run_claimed(conn, row, should_stop=None):
     """Run one claimed scan to completion. Returns its finished status dict."""
@@ -269,7 +282,16 @@ def _run_scan(state, conn):
         terms = [t for t in settings["search_terms"] if str(t).strip()]
         days = int(settings["scan_days"]) or None
 
-        ctx = ScanContext(progress=state.set_phase, stopped=state.stopped)
+        # *Where* is the one thing the crawl does not take from the admin: the
+        # pool is shared, so it is the union of every account's reach, and it
+        # empties out — back to asking the boards for everything — the moment
+        # one account cannot be placed. See `db.crawl_regions`.
+        state.regions = frozenset(db.crawl_regions(conn))
+        log.info(
+            "scan %d: crawling for %s",
+            state.scan_id,
+            ", ".join(sorted(state.regions)) or "everywhere",
+        )
 
         if any(s.needs_browser for s in sources) or _browser_enrich_pending(conn):
             # Imported here, not at module scope: the web process imports this
@@ -289,16 +311,16 @@ def _run_scan(state, conn):
                 )
                 page = context.new_page()
 
-                _search_phase(state, conn, page, sources, terms, days, ctx)
+                _search_phase(state, conn, page, sources, terms, days)
                 if not state.stopped():
-                    _enrich_phase(state, conn, page, ctx)
+                    _enrich_phase(state, conn, page)
 
                 browser.close()
         else:
             # API-only scan: no Playwright needed
-            _search_phase(state, conn, None, sources, terms, days, ctx)
+            _search_phase(state, conn, None, sources, terms, days)
             if not state.stopped():
-                _enrich_phase(state, conn, None, ctx)
+                _enrich_phase(state, conn, None)
 
         state.set_phase("Scoring matches")
         # New jobs are new for everyone: materialize and rescore every user.
@@ -341,6 +363,15 @@ def _insert_stub(conn, source, stub):
 
     posted_at = stub.get("posted_at") or dates.parse_posted(stub.get("freshness"))
 
+    # A board that names the country itself wins, the same way it does for
+    # worktype; today none do, and `places` reads the location. One derivation
+    # for both columns — the set the scorer asks about and the one code the
+    # card prints — so a five-place posting is reachable from all five and
+    # still says one thing on screen.
+    found = places.codes(source.name, stub.get("location"))
+    if stub.get("country"):
+        found = (stub["country"],)
+
     if "salary_min" in stub or "salary_max" in stub:
         s_min, s_max = stub.get("salary_min"), stub.get("salary_max")
         s_cur, s_per = stub.get("salary_currency"), stub.get("salary_period")
@@ -354,11 +385,12 @@ def _insert_stub(conn, source, stub):
         """INSERT INTO jobs
            (source, source_id, title, company, location, salary, freshness, link,
             description, skills, worktype, seniority, employment_type,
-            posted_at, salary_min, salary_max, salary_currency, salary_period)
+            posted_at, salary_min, salary_max, salary_currency, salary_period,
+            country, countries)
            VALUES (:source, :source_id, :title, :company, :location, :salary,
                    :freshness, :link, :description, :skills, :worktype, :seniority,
                    :employment_type, :posted_at, :salary_min, :salary_max,
-                   :salary_currency, :salary_period)
+                   :salary_currency, :salary_period, :country, :countries)
            ON CONFLICT (source, source_id) DO NOTHING""",
         {
             "source": source.name, "source_id": stub["source_id"],
@@ -370,12 +402,24 @@ def _insert_stub(conn, source, stub):
             "employment_type": employment_type, "posted_at": posted_at,
             "salary_min": s_min, "salary_max": s_max,
             "salary_currency": s_cur, "salary_period": s_per,
+            "country": places.primary(found), "countries": places.pack(found),
         },
     )
     return result.rowcount
 
 
-def _search_phase(state, conn, page, sources, terms, days, ctx):
+def _source_context(state, source):
+    """One ScanContext per source, so `seen` and `warn` know who is reporting."""
+    return ScanContext(
+        progress=state.set_phase,
+        stopped=state.stopped,
+        seen=lambda count: state.note_seen(source.name, count),
+        warn=lambda text: state.note_problem(source.name, text),
+        regions=state.regions,
+    )
+
+
+def _search_phase(state, conn, page, sources, terms, days):
     for source in sources:
         if state.stopped():
             return
@@ -390,7 +434,7 @@ def _search_phase(state, conn, page, sources, terms, days, ctx):
         }
         state.set_phase(f"Searching {source.label}")
         try:
-            stubs = source.search(page, terms, days, known_ids, ctx)
+            stubs = source.search(page, terms, days, known_ids, _source_context(state, source))
         except Exception as e:
             log.warning("%s search failed: %s", source.name, e)
             state.source_errors[source.name] = f"search: {e}"
@@ -399,9 +443,42 @@ def _search_phase(state, conn, page, sources, terms, days, ctx):
         for stub in stubs:
             state.found += _insert_stub(conn, source, stub)
         conn.commit()
+        _check_yield(state, source, len(stubs))
 
 
-def _enrich_phase(state, conn, page, ctx):
+def _check_yield(state, source, new_stubs):
+    """Alert when a board showed us nothing at all.
+
+    Zero *new* jobs is the ordinary result of an incremental scan and says
+    nothing is wrong. Zero *listings* is different: the board is down, or
+    blocking us, or has been redesigned and the adapter no longer finds a single
+    offer on the page. That failure is silent by construction — a scraper that
+    parses nothing raises nothing — so this is the one place it gets caught.
+
+    Logged at ERROR on purpose: it is what Sentry turns into an event, and a
+    board quietly contributing nothing for weeks is exactly the thing nobody
+    notices from a dashboard that says "done".
+    """
+    if state.stop_requested or source.name in state.source_errors:
+        return
+    # A stub without a `seen` report still counts as proof of life, for an
+    # adapter that predates the hook or reports only in bulk.
+    if state.source_seen.get(source.name, 0) or new_stubs:
+        return
+    state.note_problem(source.name, "returned no listings at all")
+    log.error(
+        "%s returned no listings — the board or the adapter is broken",
+        source.name,
+        extra={"scan_id": state.scan_id, "source": source.name},
+    )
+
+
+# What `extract.extract_all` derives from a description. `description` itself is
+# never in here: it is what was just read, not something guessed from it.
+EXTRACTED_COLUMNS = ("skills", "worktype", "seniority", "employment_type")
+
+
+def _enrich_phase(state, conn, page):
     pending = conn.execute(
         "SELECT id, source, link FROM jobs WHERE TRIM(description) = '' ORDER BY id"
     ).fetchall()
@@ -412,6 +489,11 @@ def _enrich_phase(state, conn, page, ctx):
         source = SOURCES.get(job["source"])
         if source is None or (source.needs_browser and page is None):
             continue
+        # A feed board has no detail page to read: asking it would burn a
+        # politeness delay to be handed '' — and, worse, count as a failed read.
+        if not source.has_detail_page:
+            continue
+        ctx = _source_context(state, source)
         state.set_phase(
             f"Reading job descriptions on {source.label} ({i} of {len(pending)})"
         )
@@ -421,22 +503,40 @@ def _enrich_phase(state, conn, page, ctx):
             try:
                 description = source.fetch_detail(page, job["link"])
                 break
-            except Exception:
+            except Exception as e:
+                # One posting failing is not the board failing — it is counted
+                # below and logged here, and only a source that reads *nothing*
+                # gets named on the dashboard.
+                log.warning("%s detail fetch failed for %s: %s", source.name, job["link"], e)
                 if attempt + 1 >= config.MAX_RETRIES:
-                    state.failed += 1
+                    break
                 if not ctx.sleep(5, 12):
                     return
 
         if description:
             features = extract.extract_all(description)
+            # A source's structured fields beat regex extraction — including
+            # here. Until a board had both `provides` and a detail page this
+            # was unreachable, so the enrich phase overwrote every column
+            # unconditionally: a worktype the board *stated* on its card would
+            # be replaced by whatever the prose happened to say, usually None.
+            # `provides` is the adapter's own declaration of what it set, and
+            # `reextract` already trusts it for exactly this reason.
+            columns = [c for c in EXTRACTED_COLUMNS if c not in source.provides]
+            assignments = ", ".join(f"{c} = :{c}" for c in columns)
             conn.execute(
-                """UPDATE jobs SET description = :description, skills = :skills,
-                       worktype = :worktype, seniority = :seniority,
-                       employment_type = :employment_type WHERE id = :id""",
-                dict(features, description=description, id=job["id"]),
+                f"UPDATE jobs SET description = :description, {assignments} WHERE id = :id",
+                {**{c: features[c] for c in columns},
+                 "description": description, "id": job["id"]},
             )
             conn.commit()
             state.enriched += 1
+        else:
+            # Nothing read, whether the fetch raised or answered ''. Both leave
+            # the row pending for every later scan to pay for again, and both
+            # used to be invisible: only the raising half was ever counted, so a
+            # detail selector that stopped matching reported zero failures.
+            state.failed += 1
 
         if not ctx.sleep(config.MIN_DETAIL_DELAY, config.MAX_DETAIL_DELAY):
             return

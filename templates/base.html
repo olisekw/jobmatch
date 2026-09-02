@@ -6,16 +6,18 @@
   {# Where app.js reads the token it puts on every mutating fetch(). #}
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}JobMatch{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <nav>
     <a class="brand" href="/">JobMatch</a>
     <div class="links">
-      <a href="/" class="{{ 'active' if active == 'dashboard' }}">Dashboard</a>
-      <a href="/jobs" class="{{ 'active' if active == 'jobs' }}">Jobs</a>
-      <a href="/tracker" class="{{ 'active' if active == 'tracker' }}">Tracker</a>
-      <a href="/settings" class="{{ 'active' if active == 'settings' }}">Settings</a>
+      <a href="/" class="{{ 'active' if active == 'dashboard' }}" {% if active == 'dashboard' %}aria-current="page"{% endif %}>Dashboard</a>
+      <a href="/jobs" class="{{ 'active' if active == 'jobs' }}" {% if active == 'jobs' %}aria-current="page"{% endif %}>Jobs</a>
+      <a href="/tracker" class="{{ 'active' if active == 'tracker' }}" {% if active == 'tracker' %}aria-current="page"{% endif %}>Tracker</a>
+      <a href="/settings" class="{{ 'active' if active == 'settings' }}" {% if active == 'settings' %}aria-current="page"{% endif %}>Settings</a>
       <form class="signout" method="post" action="{{ url_for('do_logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {# A form, not a link: signing out changes state, so it is a POST and
@@ -26,26 +28,41 @@
     </div>
   </nav>
 
-  <main>
+  {# Whose account this is. Everything here is shared and temporary, and a
+     visitor who does not know that reads the seeded tracker as somebody's
+     real job search. #}
+  {% if in_demo %}
+    <div class="demo-strip">
+      <b>Demo</b>
+      <span>Everything here is seeded and shared, and it is put back every
+        {{ demo_reset_hours }} hours — change what you like.</span>
+      {% if allow_signup %}
+        <a class="btn small right" href="{{ url_for('page_signup') }}">Create your own account</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {# A scan takes minutes by design — the Slovak boards are crawled with 5–16 s
+     delays — so its progress is a strip under the nav, not a modal. The page
+     stays usable, and the strip can be dismissed for the rest of that scan. #}
+  <div id="scan-strip" role="status" aria-live="polite">
+    <span class="pulse" aria-hidden="true"></span>
+    <span class="phase" id="scan-phase">Starting…</span>
+    <span class="counts" id="scan-counts"></span>
+    {# Only whoever may start the shared scan may stop it. #}
+    {% if can_scan %}<button type="button" class="link-btn" id="scan-cancel">Cancel scan</button>{% endif %}
+    <button type="button" class="dismiss" id="scan-dismiss" aria-label="Hide this progress bar">&times;</button>
+  </div>
+
+  <main id="main">
     {% block content %}{% endblock %}
   </main>
 
-  <div id="scan-overlay">
-    <div class="scan-box">
-      <div class="spinner"></div>
-      <h3>Scanning job boards</h3>
-      <div class="phase" id="scan-phase">Starting…</div>
-      <div class="counts" id="scan-counts"></div>
-      {# Only whoever may start the shared scan may stop it. #}
-      {% if can_scan %}<button class="btn ghost" id="scan-cancel">Cancel scan</button>{% endif %}
-    </div>
-  </div>
+  {# Announced, not just shown: a message that only exists visually is not a
+     message to anyone using a screen reader. #}
+  <div id="toast" role="status" aria-live="polite"></div>
 
-  <div id="toast"></div>
-
-  {# The scheduled crawl belongs to the instance, not to this tab: without this,
-     a background scan would throw a full-screen modal at a reader who did not
-     ask for one and cannot stop it. #}
+  {# The scheduled crawl belongs to the instance, not to this tab. #}
   <script>window.CAN_SCAN = {{ 'true' if can_scan else 'false' }};</script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   {% block scripts %}{% endblock %}

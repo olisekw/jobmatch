@@ -90,6 +90,14 @@ Fill in `.env` — every other value has a working default:
 | `JOBMATCH_DEBUG` | `false`. Startup refuses debug on a non-loopback bind. |
 | `ALLOW_SIGNUP` | `false` closes the door without a code change. |
 | `TRUSTED_PROXY_HOPS` | `1` for the Caddy in front. Too high lets a caller forge their own IP past the rate limits. |
+| `DEMO_MODE` | `true` puts the seeded demo account on the landing page. `DEMO_EMAIL` / `DEMO_PASSWORD` are published on that page, so change them from the repo's defaults. |
+| `SENTRY_DSN` | Optional. Unset = no error reporting; the app boots either way. |
+| `SMTP_HOST`, `MAIL_FROM` | Optional, and both are needed for either to count. Unset = the instance sends no digests; see §7. |
+| `PUBLIC_BASE_URL` | `https://$DOMAIN`. Only the emails need it — the worker has no request to build a link from, and without it a digest links to the job board rather than to your app. |
+
+`LOG_FORMAT=json` and `JOBMATCH_COMPONENT` are set per container in
+`docker-compose.yml`, not in `.env` — `web` and `worker` share one log stream
+and each line says which of them wrote it.
 
 ## 3. Start it
 
@@ -174,12 +182,56 @@ Manual deploy, same thing by hand:
 cd /opt/jobmatch && git pull && docker compose up -d --build --wait
 ```
 
+## 7. Email digests (optional)
+
+The worker mails each user the new matches their scan turned up, at most one
+message every `DIGEST_INTERVAL_HOURS`. It is off until the instance has both an
+`SMTP_HOST` and a `MAIL_FROM`; unset, the worker skips the pass entirely and
+Settings tells the user their instance cannot send mail. Nothing else changes,
+and mail is never a startup dependency — a relay that is refusing connections
+costs a digest, not the scanner.
+
+Use a transactional relay (Postmark, Resend, SES, Fastmail — anything with
+SMTP). **Do not send from the box itself**: a fresh VPS IP has no reputation,
+no SPF/DKIM and no PTR record, and the mail goes to spam or nowhere.
+
+```bash
+# in .env
+SMTP_HOST=smtp.example-relay.com
+SMTP_PORT=587                      # 465 if the relay wants implicit TLS
+SMTP_USER=...
+SMTP_PASSWORD=...
+MAIL_FROM=jobmatch@yourdomain.tld  # must be an address the relay lets you send as
+PUBLIC_BASE_URL=https://jobmatch.yourdomain.tld
+```
+
+Port 587 is plaintext until STARTTLS upgrades it; 465 is encrypted before the
+first byte of SMTP. `SMTP_SSL` and `SMTP_STARTTLS` each default off the port, so
+the usual pair needs neither — setting them the wrong way round is the reason a
+relay hangs up on you. Add SPF and DKIM records for `MAIL_FROM`'s domain at the
+relay's instructions, or every message is spam by default.
+
+Then check it without sending anything, and send one on purpose:
+
+```bash
+docker compose exec worker python3 -m jobmatch.digest --status
+docker compose exec worker python3 -m jobmatch.digest --dry-run --user you@example.com --force
+docker compose exec worker python3 -m jobmatch.digest --user you@example.com --force
+```
+
+`--force` ignores both the schedule and the user's own Notifications setting,
+which is what makes it a test rather than a wait. It still marks what it sends,
+so those jobs will not turn up in the next digest.
+
 ## Operating notes
 
 ```bash
 docker compose logs -f worker              # what the scan is doing
 docker compose exec db psql -U jobmatch    # a shell on the database
 docker compose exec web python3 -m jobmatch.setpassword   # add/reset an account
+docker compose exec web python3 -m jobmatch.demo --status  # when the demo last reset
+docker compose exec worker python3 -m jobmatch.digest --status  # who is due an email
+curl -s https://$DOMAIN/healthz                            # what an uptime monitor sees
 docker compose restart worker              # safe: an interrupted scan is
                                            # reconciled from its heartbeat
 ```
@@ -192,6 +244,29 @@ docker compose restart worker              # safe: an interrupted scan is
   the worker is why. Check `docker compose logs worker` for a tab crash.
 - **Certificate trouble.** `docker compose logs caddy`. The usual cause is DNS
   not yet pointing at the box.
+- **Point an uptime monitor at `/healthz`.** It is public, it queries the
+  database, and it answers 503 when that query fails — which is the failure a
+  check against `/login` would miss, because the web container is perfectly
+  happy to serve a page while Postgres is gone. `web`'s own container
+  healthcheck uses the same endpoint. The body carries `release`, so you can
+  see which commit is actually serving.
+- **Reading the logs.** Both containers emit one JSON object per line, tagged
+  with `component`. `docker compose logs --no-log-prefix | jq 'select(.level ==
+  "ERROR")'` is the whole tooling. A request-scoped line also carries `method`,
+  `path` and `user_id` — never an email address.
+- **The demo drifted or is empty.** `docker compose exec worker python3 -m
+  jobmatch.demo` re-seeds it immediately; the worker does it on its own every
+  `DEMO_RESET_HOURS`. The account keeps its id and password, so anybody
+  currently reading it is not signed out.
+- **Nobody is getting a digest.** `python3 -m jobmatch.digest --status` answers
+  the whole question in one screen: whether the instance can send mail at all,
+  and per account whether they left it on, when theirs last ran, and how many
+  matches are waiting. A user with 0 waiting is not a bug — an empty digest is
+  deliberately never sent. A failed send is an `ERROR` line in the worker's log
+  and leaves the jobs unmarked, so they arrive in the next one.
+- **Emergency stop on the digests.** `DIGEST_INTERVAL_HOURS=0` stops the worker
+  scheduling any, while leaving `python3 -m jobmatch.digest --force` working
+  from the shell. Clearing `SMTP_HOST` turns the feature off outright.
 - **Emergency stop on the scrapers.** `SCAN_ENABLED=false` in `.env` and
   `docker compose up -d worker web` — the schedule stops and `POST
   /api/scan/start` answers 503. No code change, no image rebuild.

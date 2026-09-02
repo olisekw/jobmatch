@@ -20,6 +20,10 @@ data/oldjobs*.csv
 data/jobmatch.db
 data/jobmatch.db-wal
 data/jobmatch.db-shm
+# Uploaded CVs. Phase 2 moved them here from data/cv.pdf and this line did not
+# follow — they are personal data and one of them was sitting untracked but
+# perfectly committable.
+data/resumes/
 
 # Debug files
 debug_output/

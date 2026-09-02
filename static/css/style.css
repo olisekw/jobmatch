@@ -1,16 +1,49 @@
-/* JobMatch — monochrome design system */
+/* JobMatch — monochrome design system.
+
+   Two palettes, one set of names. `--ink` is always "the colour text is" and
+   `--paper` "the colour the page is", so a filled button stays ink-on-paper
+   inverted in both schemes and every rule below was written once. The chrome
+   (the nav, the scan strip) is the exception and has its own `--surface`
+   tokens: swapping ink and paper would turn the black nav bar into a white
+   slab at night, which is the one thing a dark mode must not do. */
 
 :root {
+  color-scheme: light dark;
+
   --ink: #111111;
   --paper: #ffffff;
   --gray-1: #f6f6f6;
   --gray-2: #e5e5e5;
   --gray-3: #bbbbbb;
   --gray-4: #777777;
+
+  --surface: #111111;        /* nav and scan strip */
+  --on-surface: #ffffff;
+  --on-surface-dim: #bbbbbb;
+
   --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ededed;
+    --paper: #121212;
+    --gray-1: #1c1c1c;
+    --gray-2: #303030;
+    --gray-3: #565656;
+    --gray-4: #9a9a9a;
+
+    --surface: #1e1e1e;
+    --on-surface: #ededed;
+    --on-surface-dim: #8f8f8f;
+  }
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* The mobile card layouts below turn table parts into blocks, which would
+   otherwise resurrect every element the app hid with `hidden`. */
+[hidden] { display: none !important; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -22,6 +55,27 @@ body {
 
 a { color: var(--ink); }
 
+/* Keyboard users get a visible ring everywhere; mouse users get none. */
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+nav :focus-visible, #scan-strip :focus-visible { outline-color: var(--on-surface); }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip-link {
+  position: absolute; left: 0.5rem; top: -3rem;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--ink); padding: 0.5rem 0.9rem;
+  z-index: 300; transition: top 0.15s;
+}
+.skip-link:focus { top: 0.5rem; }
+
 /* ── Nav ─────────────────────────────────────────────── */
 nav {
   display: flex;
@@ -29,8 +83,8 @@ nav {
   gap: 2rem;
   padding: 0 2rem;
   height: 60px;
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--surface);
+  color: var(--on-surface);
   position: sticky;
   top: 0;
   z-index: 50;
@@ -40,12 +94,12 @@ nav .brand {
   font-size: 1.05rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--paper);
+  color: var(--on-surface);
   text-decoration: none;
 }
 nav .links { display: flex; gap: 0.25rem; margin-left: auto; }
 nav .links a {
-  color: var(--gray-3);
+  color: var(--on-surface-dim);
   text-decoration: none;
   padding: 0.4rem 0.9rem;
   font-size: 0.85rem;
@@ -53,8 +107,8 @@ nav .links a {
   text-transform: uppercase;
   border: 1px solid transparent;
 }
-nav .links a:hover { color: var(--paper); }
-nav .links a.active { color: var(--ink); background: var(--paper); font-weight: 600; }
+nav .links a:hover { color: var(--on-surface); }
+nav .links a.active { color: var(--surface); background: var(--on-surface); font-weight: 600; }
 
 nav .signout {
   display: flex; align-items: center; gap: 0.7rem;
@@ -62,15 +116,15 @@ nav .signout {
   border-left: 1px solid var(--gray-4);
 }
 nav .signout .who {
-  font-size: 0.78rem; color: var(--gray-3);
+  font-size: 0.78rem; color: var(--on-surface-dim);
   max-width: 15ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 nav .signout button {
   font: inherit; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase;
-  background: none; border: 1px solid var(--gray-4); color: var(--gray-3);
+  background: none; border: 1px solid var(--gray-4); color: var(--on-surface-dim);
   padding: 0.3rem 0.7rem; cursor: pointer;
 }
-nav .signout button:hover { color: var(--paper); border-color: var(--paper); }
+nav .signout button:hover { color: var(--on-surface); border-color: var(--on-surface); }
 
 main { max-width: 1080px; margin: 0 auto; padding: 2.5rem 2rem 5rem; }
 
@@ -96,6 +150,7 @@ h2 {
   border: 1px solid var(--ink);
   cursor: pointer;
   letter-spacing: 0.04em;
+  text-decoration: none;
   transition: opacity 0.12s;
 }
 .btn:hover { opacity: 0.82; }
@@ -104,6 +159,15 @@ h2 {
 .btn.ghost:hover { border-color: var(--ink); opacity: 1; }
 .btn.small { padding: 0.3rem 0.8rem; font-size: 0.78rem; }
 .btn.big { padding: 0.85rem 2.2rem; font-size: 0.95rem; }
+
+/* A button that reads as a link — used inside the chrome, where a boxed
+   button would fight the strip it sits in. */
+.link-btn {
+  font: inherit; font-size: 0.8rem;
+  background: none; border: none; padding: 0;
+  color: inherit; text-decoration: underline; cursor: pointer;
+}
+.link-btn:disabled { opacity: 0.5; cursor: default; }
 
 input[type="text"], input[type="number"], input[type="email"],
 input[type="password"], textarea, select {
@@ -124,6 +188,13 @@ input[type="checkbox"] { accent-color: var(--ink); width: 16px; height: 16px; cu
 
 label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3rem; }
 .hint { font-size: 0.78rem; color: var(--gray-4); font-weight: 400; }
+
+kbd {
+  font-family: var(--mono); font-size: 0.72rem;
+  border: 1px solid var(--gray-3); border-bottom-width: 2px;
+  padding: 0.05rem 0.35rem; margin: 0 0.1rem;
+}
+.kbd-hint { margin-top: 2rem; }
 
 /* ── Cards / stats ───────────────────────────────────── */
 .stat-grid {
@@ -146,6 +217,34 @@ label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3
 .stat.invert { background: var(--ink); color: var(--paper); }
 .stat.invert .label { color: var(--gray-3); }
 
+/* The tracker's counts *are* its filter. A tally you cannot click is a number
+   you then go and find in the table by hand, which is the old tracker's whole
+   problem. Same slab as .stat, plus a pressed state. */
+.stat-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 1px;
+  background: var(--gray-2);
+  border: 1px solid var(--gray-2);
+  margin-bottom: 1.4rem;
+}
+.stat-tab {
+  font: inherit; text-align: left; cursor: pointer;
+  background: var(--paper); color: var(--ink);
+  border: none; padding: 1.2rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.2rem;
+}
+.stat-tab .value { font-size: 1.9rem; font-weight: 800; font-family: var(--mono); line-height: 1.1; }
+.stat-tab .label {
+  font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--gray-4);
+}
+.stat-tab:hover { box-shadow: inset 0 -3px 0 var(--gray-3); }
+.stat-tab:hover .label { color: var(--ink); }
+.stat-tab.active { background: var(--ink); color: var(--paper); }
+.stat-tab.active .label { color: var(--gray-3); }
+.stat-tab.active:hover { box-shadow: none; }
+
 .panel { border: 1px solid var(--gray-2); padding: 1.5rem; margin-bottom: 1.5rem; }
 
 /* ── Job rows ────────────────────────────────────────── */
@@ -157,23 +256,104 @@ label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3
   border-bottom: 1px solid var(--gray-2);
   align-items: start;
 }
+.job:focus { outline: none; }
+.job.cursor {
+  box-shadow: -0.75rem 0 0 var(--ink);   /* a bar in the margin, not a border that shifts the row */
+}
+.score-cell { display: flex; flex-direction: column; gap: 0.3rem; }
 .score {
+  font: inherit;
   font-family: var(--mono);
   font-weight: 700;
   font-size: 1rem;
   text-align: center;
   padding: 0.45rem 0;
   border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  width: 100%;
 }
 .score.high { background: var(--ink); color: var(--paper); }
 .score.mid { background: var(--paper); color: var(--ink); }
 .score.low { border-color: var(--gray-3); color: var(--gray-4); }
 .score.none { border-color: var(--gray-2); color: var(--gray-3); font-weight: 400; }
+.score.big { font-size: 1.5rem; padding: 0.6rem 1.2rem; cursor: default; min-width: 5rem; }
+
+/* Four components, four bars, always in the same order. A hatched track means
+   "we could not tell" — deliberately not an empty one, because a component
+   nobody knows is left out of the score rather than counted as zero. */
+.minibars { display: flex; flex-direction: column; gap: 2px; }
+.minibar {
+  display: block; height: 3px;
+  background: var(--gray-2);
+}
+.minibar i { display: block; height: 100%; background: var(--ink); }
+.minibar.unknown {
+  background: repeating-linear-gradient(
+    -45deg, var(--gray-2) 0 2px, transparent 2px 4px);
+}
+
+.breakdown {
+  grid-column: 1 / -1;
+  border-left: 3px solid var(--gray-2);
+  padding: 0.8rem 0 0.2rem 1rem;
+  margin-top: 0.4rem;
+}
+.breakdown-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  align-items: center;
+  margin-top: 0.8rem;
+  max-width: 460px;
+}
+.breakdown-list dt { font-size: 0.8rem; font-weight: 600; }
+.breakdown-list dd { display: flex; align-items: center; gap: 0.7rem; }
+.bar {
+  flex: 1; height: 10px;
+  background: var(--gray-2);
+  border: 1px solid var(--gray-2);
+}
+.bar i { display: block; height: 100%; background: var(--ink); }
+.bar.unknown {
+  background: repeating-linear-gradient(
+    -45deg, var(--gray-2) 0 3px, transparent 3px 6px);
+}
+.bar-value {
+  font-family: var(--mono); font-size: 0.75rem;
+  color: var(--gray-4); min-width: 7ch;
+}
 
 .job .title { font-weight: 700; text-decoration: none; }
 .job .title:hover { text-decoration: underline; }
+.job .out, .tracker-table .out {
+  text-decoration: none; color: var(--gray-4);
+  font-size: 0.85rem; padding: 0 0.3rem;
+}
+.job .out:hover, .tracker-table .out:hover { color: var(--ink); }
 .job .meta { color: var(--gray-4); font-size: 0.85rem; margin-top: 0.15rem; }
 .job .tags { margin-top: 0.45rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+/* Pay, work mode and country — the three things a job list is read for, given
+   a row of their own above the grey tag soup. Each one always renders: "No pay
+   listed" is an answer, an empty gap is a bug the reader has to rule out. */
+.keyfacts { margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.keyfact {
+  font-size: 0.78rem; font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--ink);
+  display: inline-flex; align-items: baseline; gap: 0.45rem;
+}
+.keyfact.pay { font-family: var(--mono); font-size: 0.75rem; }
+/* The ≈hourly figure rides along quieter than the board's own number: it is
+   derived, and the range above it is what the posting actually says. */
+.keyfact.pay i { font-style: normal; font-weight: 400; color: var(--gray-4); }
+/* Remote is the one people are scanning for, so it is the one that is filled. */
+.keyfact.mode.remote { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.keyfact.place { border-color: var(--gray-3); font-weight: 500; }
+.keyfact.none { border-color: var(--gray-2); color: var(--gray-4); font-weight: 400; }
+.detail-head .keyfacts { margin-bottom: 0.6rem; }
 
 .tag {
   font-size: 0.7rem;
@@ -181,6 +361,7 @@ label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3
   padding: 0.1rem 0.5rem;
   border: 1px solid var(--gray-2);
   color: var(--gray-4);
+  display: inline-block;
 }
 .tag.match { border-color: var(--ink); color: var(--ink); font-weight: 600; }
 .tag.src { background: var(--gray-1); border-color: var(--gray-1); }
@@ -188,20 +369,55 @@ label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3
 
 .job .actions { display: flex; flex-direction: column; gap: 0.4rem; min-width: 96px; }
 
+.more-row { display: flex; align-items: center; gap: 1rem; padding: 1.5rem 0; }
+
+/* ── Job detail ──────────────────────────────────────── */
+.crumb { margin-bottom: 1.2rem; font-size: 0.85rem; }
+.crumb a { color: var(--gray-4); text-decoration: none; }
+.crumb a:hover { color: var(--ink); }
+
+.detail-head {
+  display: flex; gap: 2rem; align-items: start; justify-content: space-between;
+  padding-bottom: 1.4rem; border-bottom: 2px solid var(--ink);
+}
+.detail-head .subtitle { margin-bottom: 0.8rem; }
+.detail-head .tags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.detail-score { text-align: center; flex: none; }
+.detail-score .hint {
+  text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.4rem;
+}
+.detail-actions {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 1.2rem 0;
+}
+.detail-actions .actions { display: flex; gap: 0.5rem; }
+
+/* Descriptions are stored as one plain-text block (the scrapers strip the
+   board's markup), so readability here is line length and spacing. */
+.description {
+  max-width: 68ch;
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+
 /* ── Filter bar ──────────────────────────────────────── */
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
-  align-items: end;
+  gap: 1rem 1.1rem;
+  /* Tops, not bottoms: one field carries a note under its control, and `end`
+     lined every other control up against that note instead of against them. */
+  align-items: start;
   padding: 1rem 0 1.4rem;
   border-bottom: 2px solid var(--ink);
   margin-bottom: 0.4rem;
 }
 .filters .field { display: flex; flex-direction: column; gap: 0.25rem; }
-.filters .field > span {
+.filters .field > .hint { margin-top: 0.1rem; max-width: 14rem; }
+/* :not(.hint) — a note under a control is a sentence, not another heading. */
+.filters .field > span:not(.hint), .filters .field > label {
   font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
-  color: var(--gray-4); font-weight: 600;
+  color: var(--gray-4); font-weight: 600; margin-bottom: 0;
 }
 .filters input[type="text"] { width: 200px; }
 
@@ -219,6 +435,42 @@ label { font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 0.3
 .range-wrap { display: flex; align-items: center; gap: 0.6rem; width: 210px; }
 .range-wrap output { font-family: var(--mono); font-weight: 700; min-width: 42px; text-align: right; }
 
+/* ── Loading and error states ────────────────────────── */
+.skeleton { pointer-events: none; }
+.skeleton .job-main { display: flex; flex-direction: column; gap: 0.5rem; }
+.sk {
+  display: block;
+  background: var(--gray-2);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.sk-score { width: 100%; height: 2.1rem; }
+.sk-line { height: 0.8rem; width: 100%; }
+.sk-line.short { width: 30%; }
+.sk-line.tags { width: 45%; height: 0.7rem; }
+.detail-skeleton { display: flex; flex-direction: column; gap: 0.8rem; max-width: 40rem; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .sk, .pulse { animation: none; }
+}
+
+/* A list waiting on a new filter is still the old list — dimmed, not blanked,
+   so the page does not jump every time a slider moves. */
+.pending { opacity: 0.45; transition: opacity 0.15s; pointer-events: none; }
+
+.load-error {
+  border: 1px solid var(--ink); border-left-width: 4px;
+  padding: 1rem 1.2rem; margin: 1.5rem 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.save-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.save-note { font-size: 0.82rem; color: var(--gray-4); margin-top: 1rem; }
+.save-note.bad {
+  color: var(--ink); font-weight: 600;
+  border-left: 3px solid var(--ink); padding-left: 0.6rem;
+}
+
 /* ── Tables (tracker) ────────────────────────────────── */
 table { width: 100%; border-collapse: collapse; }
 th {
@@ -227,6 +479,10 @@ th {
   padding: 0.6rem 0.75rem; border-bottom: 2px solid var(--ink);
 }
 td { padding: 0.85rem 0.75rem; border-bottom: 1px solid var(--gray-2); vertical-align: top; }
+/* The job title and the ↗ that opens the original are one thing; a column
+   narrow enough to break them apart makes the arrow look like a stray. */
+.tracker-table .title { display: inline; }
+.tracker-table td[data-label="Company"] { font-size: 0.9rem; }
 tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9rem 1.2rem; }
 
 .status-select { font-size: 0.82rem; padding: 0.3rem 0.5rem; }
@@ -241,7 +497,8 @@ tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9re
 .chip-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
 .chip {
   font: inherit; font-size: 0.78rem; padding: 0.25rem 0.75rem;
-  border: 1px solid var(--gray-3); background: var(--paper); cursor: pointer;
+  border: 1px solid var(--gray-3); background: var(--paper); color: var(--ink);
+  cursor: pointer;
 }
 .chip.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
@@ -255,28 +512,37 @@ tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9re
 }
 .dropzone:hover, .dropzone.drag { border-color: var(--ink); color: var(--ink); }
 
-/* ── Scan overlay ────────────────────────────────────── */
-#scan-overlay {
-  position: fixed; inset: 0;
-  background: rgba(255, 255, 255, 0.96);
+/* ── Scan progress strip ─────────────────────────────────
+   A scan takes minutes on purpose (the Slovak boards are crawled slowly), so
+   it reports from a strip under the nav and the page underneath stays usable.
+   It used to be a full-screen modal over an operation nobody can hurry. */
+#scan-strip {
   display: none;
-  align-items: center; justify-content: center;
-  z-index: 100;
+  align-items: center; gap: 1rem;
+  padding: 0.55rem 2rem;
+  background: var(--surface);
+  color: var(--on-surface);
+  border-top: 1px solid var(--gray-4);
+  font-size: 0.85rem;
+  position: sticky; top: 60px; z-index: 49;
 }
-#scan-overlay.open { display: flex; }
-.scan-box { text-align: center; max-width: 480px; padding: 2rem; }
-.scan-box .spinner {
-  width: 46px; height: 46px;
-  margin: 0 auto 1.5rem;
-  border: 3px solid var(--gray-2);
-  border-top-color: var(--ink);
+#scan-strip.open { display: flex; }
+#scan-strip .pulse {
+  width: 8px; height: 8px; flex: none;
+  background: var(--on-surface);
   border-radius: 50%;
-  animation: spin 0.9s linear infinite;
+  animation: pulse 1.2s ease-in-out infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-.scan-box h3 { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
-.scan-box .phase { font-size: 0.9rem; color: var(--ink); margin: 0.8rem 0 0.4rem; min-height: 1.4em; }
-.scan-box .counts { font-size: 0.8rem; color: var(--gray-4); margin-bottom: 1.6rem; }
+#scan-strip .phase { font-weight: 600; }
+#scan-strip .counts { color: var(--on-surface-dim); }
+#scan-strip .link-btn { margin-left: auto; color: var(--on-surface-dim); }
+#scan-strip .link-btn:hover { color: var(--on-surface); }
+#scan-strip .dismiss {
+  font: inherit; font-size: 1.2rem; line-height: 1;
+  background: none; border: none; color: var(--on-surface-dim);
+  cursor: pointer; padding: 0 0.2rem;
+}
+#scan-strip .dismiss:hover { color: var(--on-surface); }
 
 /* ── Toast ───────────────────────────────────────────── */
 #toast {
@@ -325,10 +591,204 @@ tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9re
 .danger-zone .btn { background: var(--paper); color: var(--ink); border-color: var(--ink); }
 .danger-zone .btn:hover { background: var(--ink); color: var(--paper); opacity: 1; }
 
+/* ── The demo strip ──────────────────────────────────────
+   Under the nav on every page of a demo session, so nobody spends five minutes
+   wondering whose applications these are. Reads as chrome, not as an error. */
+.demo-strip {
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  padding: 0.5rem 2rem;
+  background: var(--gray-1);
+  border-bottom: 1px solid var(--gray-2);
+  font-size: 0.82rem;
+}
+.demo-strip b { letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.72rem; }
+.demo-strip .right { margin-left: auto; }
+
+/* ── Landing page ────────────────────────────────────────
+   The public front door. It shares every token and every button with the app,
+   so the page a visitor lands on and the page they sign into are visibly the
+   same piece of software. No script tag, no framework — it is a document. */
+.landing-bar {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 0 2rem; height: 60px;
+  background: var(--surface); color: var(--on-surface);
+}
+.landing-bar .brand {
+  font-weight: 800; font-size: 1.05rem;
+  letter-spacing: 0.12em; text-transform: uppercase;
+}
+.landing-links { display: flex; align-items: center; gap: 1.2rem; margin-left: auto; }
+.landing-links a { color: var(--on-surface-dim); text-decoration: none; font-size: 0.85rem; }
+.landing-links a:hover { color: var(--on-surface); }
+.landing-links .btn { background: var(--on-surface); color: var(--surface); border-color: var(--on-surface); }
+.landing-bar :focus-visible { outline-color: var(--on-surface); }
+
+.landing main { max-width: 1080px; margin: 0 auto; padding: 4rem 2rem 5rem; }
+.landing section { margin-bottom: 4.5rem; }
+.landing h1 { font-size: 2.8rem; line-height: 1.1; max-width: 18ch; }
+.landing h2 {
+  font-size: 1.4rem; border-bottom: 2px solid var(--ink);
+  padding-bottom: 0.4rem; margin-bottom: 1.6rem;
+}
+.landing h3 { font-size: 0.95rem; margin-bottom: 0.4rem; }
+.landing p { max-width: 62ch; }
+.lede { font-size: 1.05rem; color: var(--gray-4); margin-top: 1.2rem; }
+
+.hero .cta { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 2.2rem; }
+.hero .demo-note { margin-top: 1rem; max-width: 62ch; line-height: 1.6; }
+.hero .demo-note code {
+  font-family: var(--mono); font-size: 0.95em;
+  border: 1px solid var(--gray-2); padding: 0.05rem 0.3rem;
+}
+
+.cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; }
+.cols p { font-size: 0.9rem; color: var(--gray-4); }
+
+/* The one place the app is willing to look like a formula, because it is one. */
+.formula {
+  font-family: var(--mono); font-size: 0.9rem;
+  border: 1px solid var(--ink); border-left-width: 4px;
+  padding: 1rem 1.2rem; margin: 1.8rem 0 0.6rem;
+  overflow-x: auto;
+}
+.formula-note { font-size: 0.85rem; color: var(--gray-4); margin-bottom: 2rem; }
+
+.components {
+  display: grid; grid-template-columns: 10rem 1fr;
+  gap: 0.5rem 1.5rem; margin-bottom: 2rem;
+}
+.components dt { font-weight: 700; font-size: 0.9rem; }
+.components dd { font-size: 0.9rem; color: var(--gray-4); }
+
+.callout { border: 1px solid var(--gray-2); padding: 1.5rem; }
+.callout h3 { margin-top: 1.4rem; }
+.callout h3:first-child { margin-top: 0; }
+.callout p { font-size: 0.9rem; color: var(--gray-4); margin-top: 0.3rem; }
+
+.shot { margin-bottom: 4.5rem; }
+.shot img {
+  display: block; width: 100%; height: auto;
+  border: 1px solid var(--gray-2);
+}
+.shot figcaption { font-size: 0.8rem; color: var(--gray-4); margin-top: 0.5rem; }
+.shot-pair {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;
+  margin-bottom: 4.5rem;
+}
+.shot-pair .shot { margin-bottom: 0; }
+
+.build-list { list-style: none; }
+.build-list li {
+  border-left: 2px solid var(--gray-2);
+  padding: 0 0 0 1rem; margin-bottom: 1rem;
+  font-size: 0.9rem; color: var(--gray-4); max-width: 70ch;
+}
+.build-list b { color: var(--ink); }
+.build-list code { font-family: var(--mono); font-size: 0.9em; }
+
+.landing-foot {
+  display: flex; gap: 1rem; flex-wrap: wrap;
+  max-width: 1080px; margin: 0 auto;
+  padding: 1.5rem 2rem 3rem;
+  border-top: 1px solid var(--gray-2);
+  font-size: 0.82rem; color: var(--gray-4);
+}
+.landing-foot span:last-child { margin-left: auto; }
+.landing-foot a { color: var(--gray-4); }
+.landing-foot a:hover { color: var(--ink); }
+
+/* ── Phone ───────────────────────────────────────────────
+   Both lists become cards. A six-column table and a three-column grid do not
+   survive 375 px, and half-collapsing them is worse than not collapsing. */
 @media (max-width: 720px) {
-  nav { padding: 0 1rem; gap: 1rem; }
-  main { padding: 1.5rem 1rem 4rem; }
-  .job { grid-template-columns: 60px 1fr; }
-  .job .actions { grid-column: 1 / -1; flex-direction: row; }
+  /* Four uppercase labels, an email and a button do not fit across 390 px —
+     they were overflowing the viewport and taking the whole page's horizontal
+     scroll with them. The nav is allowed to be two lines instead: the brand
+     keeps the first, everything else wraps under it and stays reachable. */
+  nav {
+    height: auto; min-height: 60px;
+    padding: 0.5rem 0.6rem; gap: 0.35rem 0.5rem;
+    flex-wrap: wrap;
+  }
+  nav .links { flex-wrap: wrap; row-gap: 0.3rem; }
+  /* Tight enough that the four links and Sign out share the second line
+     rather than making a third one. */
+  nav .links a { padding: 0.4rem 0.3rem; font-size: 0.7rem; letter-spacing: 0; }
+  nav .signout { margin-left: 0.3rem; padding-left: 0.4rem; }
+  nav .signout button { padding: 0.3rem 0.5rem; letter-spacing: 0.02em; }
   nav .signout .who { display: none; }
+  nav .signout button { white-space: nowrap; padding: 0.3rem 0.5rem; }
+  #scan-strip { padding: 0.55rem 1rem; flex-wrap: wrap; gap: 0.6rem; }
+  #scan-strip .link-btn { margin-left: 0; }
+  main { padding: 1.5rem 1rem 4rem; }
+
+  .job {
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 0.9rem;
+    align-items: center;
+    border: 1px solid var(--gray-2);
+    padding: 0.9rem;
+    margin-bottom: 0.8rem;
+  }
+  .job.cursor { box-shadow: none; border-color: var(--ink); border-left-width: 4px; }
+  .score-cell { flex-direction: column; width: 56px; }
+  .job .actions { grid-column: 1 / -1; flex-direction: row; }
+  .job .actions .btn { flex: 1; }
+  .breakdown { padding-left: 0.8rem; }
+  .breakdown-list { grid-template-columns: 1fr; gap: 0.2rem; }
+  .breakdown-list dd { margin-bottom: 0.5rem; }
+
+  /* Two to a row at 375 px, and the numbers shrink to match. */
+  .stat-tabs { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+  .stat-tab { padding: 0.8rem 0.7rem; }
+  .stat-tab .value { font-size: 1.4rem; }
+  .stat-tab .label { font-size: 0.62rem; letter-spacing: 0.08em; }
+
+  .demo-strip { padding: 0.5rem 1rem; }
+
+  .landing-bar { padding: 0 1rem; gap: 0.6rem; }
+  .landing-links { gap: 0.7rem; }
+  .landing main { padding: 2.5rem 1rem 3rem; }
+  .landing section { margin-bottom: 3rem; }
+  .landing h1 { font-size: 1.9rem; max-width: none; }
+  .hero .cta .btn, .hero .cta form { width: 100%; }
+  .hero .cta .btn { display: block; text-align: center; }
+  .cols, .shot-pair { grid-template-columns: 1fr; gap: 1.8rem; }
+  .components { grid-template-columns: 1fr; gap: 0.15rem 0; }
+  .components dd { margin-bottom: 0.7rem; }
+  .shot, .shot-pair { margin-bottom: 3rem; }
+  .landing-foot { padding: 1.2rem 1rem 2.5rem; }
+  .landing-foot span:last-child { margin-left: 0; }
+
+  .filters { gap: 0.9rem; }
+  .filters .field, .filters input[type="text"], .range-wrap { width: 100%; }
+  .tabs { width: 100%; }
+  .tabs button { flex: 1; padding: 0.45rem 0.5rem; }
+
+  .detail-head { flex-direction: column; gap: 1rem; }
+  .detail-score { display: flex; align-items: baseline; gap: 0.8rem; text-align: left; }
+
+  .tracker-table thead { display: none; }
+  .tracker-table, .tracker-table tbody, .tracker-table tr, .tracker-table td { display: block; }
+  .tracker-table tr[data-id] {
+    border: 1px solid var(--gray-2);
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 0.8rem;
+  }
+  .tracker-table td {
+    border: none;
+    padding: 0.35rem 0;
+    display: flex; flex-wrap: wrap; gap: 0.2rem 0.6rem; align-items: baseline;
+  }
+  .tracker-table td::before {
+    content: attr(data-label);
+    flex: 0 0 6rem;
+    font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--gray-4); font-weight: 600;
+  }
+  .tracker-table td > input, .tracker-table td > select { flex: 1; min-width: 8rem; }
+  .tracker-table td[data-label=""] { display: block; }
+  .tracker-table tr.events-row { margin: -0.5rem 0 0.8rem; }
+  .tracker-table tr.events-row td { display: block; padding: 0.9rem; }
+  .tracker-table tr.events-row td::before { content: none; }
 }

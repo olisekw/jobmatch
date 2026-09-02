@@ -1,8 +1,11 @@
-"""Re-run regex extraction over jobs already in the database — safe to re-run.
+"""Re-run the insert-time derivations over jobs already in the database — safe
+to re-run.
 
-Extraction happens once, at insert time, so a fix to the `config.py` patterns
-only reaches jobs scanned *after* it. This replays `extract.extract_all` over
-every stored description so existing rows get the benefit too, then re-scores.
+Extraction and placement both happen once, at insert time, so a fix to the
+`config.py` patterns or to the `places` tables only reaches jobs scanned
+*after* it. This replays `extract.extract_all` over every stored description
+and `places.codes` over every stored location, so existing rows get the
+benefit too, then re-scores.
 
 Two rules keep it honest:
 
@@ -11,7 +14,8 @@ Two rules keep it honest:
   because in the DB a board-supplied "remote" is indistinguishable from a
   regex-derived one. Only fields the board left to regex are recomputed.
 - **Nothing user-owned is touched** — statuses, applications and events are
-  untouched; `match_score` changes only because its inputs did.
+  untouched; `match_score` changes only because its inputs did. Everything it
+  writes is derived from columns the row already carries.
 
 Dry run by default; pass --apply to write.
 
@@ -21,7 +25,7 @@ Usage: python3 -m jobmatch.reextract [--apply]
 import sys
 from collections import Counter
 
-from . import db, extract, scoring
+from . import db, extract, places, scoring
 from .sources import SOURCES
 
 # Columns this tool can recompute, mapped to their `extract_all` key.
@@ -81,6 +85,42 @@ def _recompute(conn):
     return updates, changes
 
 
+def _replace_places(conn):
+    """Return the `country`/`countries` rows a re-derivation would change.
+
+    `places` is the same shape as `extract`: a derivation run once at insert
+    time, so a fix to its tables — a town added, or the multi-region rule that
+    stopped "LATAM, Europe, USA, Canada, APAC" being stored as `US` — only
+    reaches rows scanned after it. Both columns are recomputed together
+    because they are one derivation, and neither is user-owned.
+
+    A row nothing places any more keeps what it has: an emptier answer is not
+    a better one, and `SOURCE_DEFAULT` already covers the boards that can be
+    guessed for.
+    """
+    rows = conn.execute(
+        "SELECT id, source, location, country, countries FROM jobs"
+    ).fetchall()
+
+    updates, moved = [], Counter()
+    for row in rows:
+        found = places.codes(row["source"], row["location"])
+        if not found:
+            continue
+        primary, packed = places.primary(found), places.pack(found)
+        if primary == row["country"] and packed == row["countries"]:
+            continue
+        moved[(row["country"], primary)] += 1
+        updates.append({"country": primary, "countries": packed, "id": row["id"]})
+
+    print(f"scanned {len(rows)} jobs for placement; {len(updates)} would change")
+    if moved:
+        top = ", ".join(f"{old or '—'}→{new or '—'}: {n}"
+                        for (old, new), n in moved.most_common(8))
+        print(f"  country: {top}")
+    return updates
+
+
 def _report(changes):
     for field in FIELDS:
         counter = changes[field]
@@ -103,6 +143,7 @@ def main(argv=None):
 
     updates, changes = _recompute(conn)
     _report(changes)
+    placements = _replace_places(conn)
 
     if not apply:
         print("\ndry run — nothing written. Re-run with --apply to commit.")
@@ -114,8 +155,12 @@ def main(argv=None):
         "seniority = :seniority, employment_type = :employment_type WHERE id = :id",
         updates,
     )
+    conn.executemany(
+        "UPDATE jobs SET country = :country, countries = :countries WHERE id = :id",
+        placements,
+    )
     conn.commit()
-    print(f"\napplied {len(updates)} row updates")
+    print(f"\napplied {len(updates)} extraction and {len(placements)} placement updates")
 
     after = _status_counts(conn)
     assert before == after, f"status counts changed! {before} → {after}"

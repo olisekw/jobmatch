@@ -50,7 +50,7 @@ def set_password(conn, email, password, make_admin=False):
     if row is None:
         # A brand-new account with nothing in it is only useful as an admin if
         # there is no admin yet; otherwise --admin has to be asked for.
-        first = db.default_user_id(conn) is None
+        first = not db.has_admin(conn)
         user_id = db.create_user(conn, email, password_hash, is_admin=first or make_admin)
         conn.commit()
         # Without this the new account's Jobs page is empty until the next scan.

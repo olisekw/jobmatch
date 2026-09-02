@@ -2,6 +2,13 @@
 
 GET https://remotive.com/api/remote-jobs?search=<term>; salary is free text,
 publication_date is ISO.
+
+No geography in the request, so `ctx.regions` is ignored here — and the reason
+is worth writing down, because the failure mode is quiet: the API accepts
+unknown query parameters and answers as if they were not there. `&geo=europe`
+returns *character-for-character the same twenty jobs* as no parameter at all,
+so a narrowing that had been guessed at rather than confirmed would have looked
+like it worked and silently done nothing.
 """
 
 import json
@@ -24,6 +31,7 @@ class RemotiveSource(JobSource):
     name = "remotive"
     label = "Remotive"
     provides = frozenset({"worktype", "employment_type"})
+    has_detail_page = False   # the feed carries the description
 
     def search(self, page, terms, days, known_ids, ctx):
         cutoff = posted_cutoff(days)
@@ -35,9 +43,14 @@ class RemotiveSource(JobSource):
             ctx.progress(f"Searching {self.label} for “{term}” ({i} of {len(terms)})")
             try:
                 data = json.loads(http_get(API_URL.format(term=quote(term))))
-            except Exception:
-                continue  # one term failing shouldn't sink the source
+            except Exception as e:
+                # One term failing shouldn't sink the source — but it should
+                # not vanish either, or a board that answers nothing but 503s
+                # reads exactly like a board with no matching jobs.
+                ctx.warn(f"“{term}”: {e}")
+                continue
 
+            ctx.seen(len(data.get("jobs", [])))
             for item in data.get("jobs", []):
                 source_id = str(item.get("id") or "")
                 if not source_id or source_id in known_ids:

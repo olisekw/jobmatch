@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 import config
-from jobmatch import db, reextract
+from jobmatch import backfill, db, places, reextract
 from jobmatch.sources import SOURCES
 
 # An ad whose Slovak text regex-extracts as hybrid (explicitly partial WFH).
@@ -132,3 +132,86 @@ class ReextractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlacementReplayTests(unittest.TestCase):
+    """Replaying `places` over stored rows — the other half of `reextract`.
+
+    Placement has the same shape as extraction: derived once, at insert time,
+    from columns the row still carries. So the fix that stopped "LATAM,
+    Europe, USA, Canada, APAC" being stored as `US` has to be able to reach
+    the rows already in the pool, and `jobmatch.backfill` has to be able to
+    reach a database that predates the column at all.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_db_path = config.DB_PATH
+        config.DB_PATH = Path(self._tmp.name) / "test.db"
+        self.conn = db.get_conn()
+        db.init_schema(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        config.DB_PATH = self._orig_db_path
+        self._tmp.cleanup()
+
+    def _insert_old(self, source_id, location, country):
+        """A row as the old derivation left it: one code, and no set."""
+        self.conn.execute(
+            "INSERT INTO jobs (source, source_id, link, description, location, "
+            "country) VALUES ('remotive', :source_id, :link, :description, "
+            ":location, :country)",
+            {"source_id": source_id, "link": f"http://x/{source_id}",
+             "description": HYBRID_AD, "location": location, "country": country},
+        )
+        self.conn.commit()
+
+    def _placement(self, source_id):
+        row = self.conn.execute(
+            "SELECT country, countries FROM jobs WHERE source_id = :source_id",
+            {"source_id": source_id},
+        ).fetchone()
+        return row["country"], row["countries"]
+
+    def test_backfill_packs_the_set_and_brings_the_printed_code_into_step(self):
+        self._insert_old("m1", "LATAM, Europe, USA, Canada, APAC", "US")
+        backfill.migrate_countries(self.conn)
+        country, countries = self._placement("m1")
+        self.assertEqual(country, "EU")
+        self.assertEqual(set(places.unpack(countries)),
+                         {"US", "CA", "EU", "LATAM", "APAC"})
+
+    def test_backfill_is_idempotent(self):
+        self._insert_old("m1", "Americas, Europe, Israel", "IL")
+        backfill.migrate_countries(self.conn)
+        first = self._placement("m1")
+        backfill.migrate_countries(self.conn)
+        self.assertEqual(self._placement("m1"), first)
+
+    def test_a_row_nothing_places_keeps_its_answer_rather_than_losing_it(self):
+        """An emptier answer is not a better one — an old pattern's code is
+        packed as a set of one instead of being thrown away."""
+        self._insert_old("m2", "Contact us for details", "US")
+        backfill.migrate_countries(self.conn)
+        self.assertEqual(self._placement("m2"), ("US", "|US|"))
+
+    def test_a_row_with_no_answer_at_all_stays_unplaced(self):
+        self._insert_old("m3", "Contact us for details", None)
+        backfill.migrate_countries(self.conn)
+        self.assertEqual(self._placement("m3"), (None, None))
+
+    def test_reextract_replays_the_placement_and_the_dry_run_writes_nothing(self):
+        self._insert_old("m1", "LATAM, Europe, USA, Canada, APAC", "US")
+        reextract.main([])
+        self.assertEqual(self._placement("m1"), ("US", None))
+        reextract.main(["--apply"])
+        self.assertEqual(self._placement("m1")[0], "EU")
+
+    def test_reextract_is_idempotent(self):
+        self._insert_old("m1", "Berlin, Germany", "DE")
+        reextract.main(["--apply"])
+        first = self._placement("m1")
+        reextract.main(["--apply"])
+        self.assertEqual(self._placement("m1"), first)
+

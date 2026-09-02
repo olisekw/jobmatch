@@ -40,6 +40,8 @@ from sqlalchemy.sql.expression import FunctionElement
 
 import config
 
+from . import places, salary
+
 metadata = MetaData()
 
 
@@ -132,10 +134,21 @@ jobs = Table(
     Column("salary_max", Float),
     Column("salary_currency", Text),
     Column("salary_period", Text),
+    # Derived from `location` + `source` by `jobmatch.places` at insert time.
+    # Stored rather than computed per request because the Jobs page filters on
+    # it, and a filter over prose is a LIKE nobody can index.
+    #
+    # Two columns because a posting hiring in five places names five: `country`
+    # is the one a card prints, `countries` the packed set (`|EU|US|CA|`) that
+    # every question about *reach* is asked of. They are one derivation — see
+    # `places.codes()` / `places.primary()` — so they cannot disagree.
+    Column("country", Text),
+    Column("countries", Text),
     UniqueConstraint("source", "source_id", name="uq_jobs_source"),
 )
 Index("idx_jobs_source", jobs.c.source)
 Index("idx_jobs_posted", jobs.c.posted_at)
+Index("idx_jobs_country", jobs.c.country)
 
 # One row per (user, job): everything scoring and triage own.
 user_jobs = Table(
@@ -147,6 +160,11 @@ user_jobs = Table(
     Column("match_score", Float),
     Column("score_breakdown", Text),
     Column("scored_at", Text),
+    # When this job went out in an email digest — NULL means it never has.
+    # Stored, unlike "matched", because it is a fact about something that
+    # already left the building: a digest cannot be re-derived from the current
+    # score, and nobody wants yesterday's matches again because a weight moved.
+    Column("digested_at", Text),
     CheckConstraint(_in_list("status", JOB_STATUSES), name="ck_user_jobs_status"),
     UniqueConstraint("user_id", "job_id", name="uq_user_jobs_user_job"),
 )
@@ -232,6 +250,11 @@ Index("idx_scans_status", scans.c.status)
 JOB_ORDER = {
     "score": "uj.match_score DESC NULLS LAST, COALESCE(j.posted_at, j.scraped_at) DESC",
     "date": "COALESCE(j.posted_at, j.scraped_at) DESC, uj.match_score DESC NULLS LAST",
+    # Pay sorts on the derived euros-an-hour — the only form in which a monthly
+    # Slovak salary, a Czech one and an annual American one are the same kind of
+    # number. Jobs that quote no salary, or quote one we cannot convert, sort
+    # last rather than as zero.
+    "pay": f"{salary.HOURLY_EUR_SQL} DESC NULLS LAST, uj.match_score DESC NULLS LAST",
 }
 
 DEFAULT_SETTINGS = {
@@ -243,13 +266,25 @@ DEFAULT_SETTINGS = {
     "seniority_strict": False,
     "search_terms": config.SEARCH_PROFILES[config.DEFAULT_SEARCH_PROFILE],
     "active_profile": config.DEFAULT_SEARCH_PROFILE,
-    "enabled_sources": ["profesia", "kariera", "remoteok", "remotive", "jobicy", "arbeitnow"],
+    "enabled_sources": ["profesia", "kariera", "jobscz", "remoteok", "remotive",
+                        "jobicy", "arbeitnow"],
     "scan_days": 7,
     "user_location": "",
+    # Where this user can work, as `places` codes — a different question from
+    # `user_location` ("the town I want to work in"), which is why it is a
+    # different setting: one is a commute, the other is a work permit, and a
+    # remote job in Denver is wrong for a person in Bratislava for the second
+    # reason and not the first. Empty means "not answered", and is derived from
+    # `user_location` rather than guessed at — see `get_user_prefs`.
+    "user_regions": [],
     "user_seniority": "",
     "user_worktype": "",
     "user_skills": [],
     "resume_text": "",
+    # Whether this user wants the digest of new matches. Per user, and on by
+    # default — but the instance-wide gate is whether SMTP is configured at
+    # all, so on a box that cannot send mail this setting does nothing.
+    "digest_enabled": True,
 }
 
 # Settings that belong to the shared crawl rather than to one user. They stay in
@@ -521,6 +556,18 @@ def ensure_local_user(conn):
     return user_id
 
 
+def has_admin(conn):
+    """Is there an account that owns this instance?
+
+    What "the first account is the admin" actually means, asked as a question
+    about admins rather than about ids. The distinction started to matter with
+    the demo account: it is created with `is_admin = 0` and may well be user 1
+    on a fresh box, and "is the table empty?" would then hand the instance to
+    nobody at all.
+    """
+    return conn.scalar("SELECT id FROM users WHERE is_admin = 1 LIMIT 1") is not None
+
+
 def admin_user_id(conn):
     """Whose settings drive the shared crawl. Falls back to the first user."""
     return conn.scalar(
@@ -547,14 +594,29 @@ def ensure_user_jobs(conn, user_id):
     return inserted
 
 
-def delete_user(conn, user_id):
-    """Wipe every row a user owns. The CV file is `app.api_account_delete`'s job."""
+def reset_user_data(conn, user_id):
+    """Wipe everything a user owns *except* the account itself. Caller commits.
+
+    The order is the foreign keys read backwards. Split out of `delete_user`
+    because `jobmatch.demo` needs exactly this and not the last step: the demo
+    account has to keep its id and its password across a nightly reset, or
+    every session open on it would end at midnight.
+    """
     params = {"user_id": user_id}
     for sql in (
         "DELETE FROM application_events WHERE user_id = :user_id",
         "DELETE FROM applications WHERE user_id = :user_id",
         "DELETE FROM user_jobs WHERE user_id = :user_id",
         "DELETE FROM user_settings WHERE user_id = :user_id",
+    ):
+        conn.execute(sql, params)
+
+
+def delete_user(conn, user_id):
+    """Wipe every row a user owns. The CV file is `app.api_account_delete`'s job."""
+    params = {"user_id": user_id}
+    reset_user_data(conn, user_id)
+    for sql in (
         "UPDATE scans SET requested_by = NULL WHERE requested_by = :user_id",
         "DELETE FROM users WHERE id = :user_id",
     ):
@@ -614,10 +676,69 @@ def get_weights(conn, user_id):
     }
 
 
+def user_regions(settings):
+    """The codes a user can work in — what they answered, or what follows from
+    their town when they have not.
+
+    Deriving the fallback rather than defaulting to Europe means the setting can
+    stay empty (so Settings can show it as unanswered) while scoring still has
+    something honest to work with, and it does not assume everybody is European.
+    Both halves go through `places`, so the picker, the scorer and the Jobs
+    filter cannot disagree about what "Europe" contains.
+    """
+    chosen = {str(c).strip().upper() for c in (settings.get("user_regions") or [])}
+    chosen &= set(places.LABELS)
+    if chosen:
+        return chosen
+    return places.default_regions(places.country(None, settings.get("user_location")))
+
+
+def crawl_regions(conn):
+    """Where the people this instance crawls for can work — the union of it.
+
+    The crawl is shared: one scrape serves every account, so the only honest
+    thing to narrow it by is every account's answer at once. Read through
+    `user_regions`, so a user who has answered nothing still counts as their
+    town rather than as nobody.
+
+    **One unplaceable user empties the whole thing**, and that is the point: an
+    account we cannot place could want a job anywhere, and a narrowed crawl
+    would never fetch it into the shared pool for them to be scored against.
+    An empty set means "ask the boards for everything", which is what they were
+    asked for before any of this existed.
+    """
+    rows = conn.execute(
+        """SELECT u.id AS user_id, s.key AS key, s.value AS value
+             FROM users u
+             LEFT JOIN user_settings s
+               ON s.user_id = u.id AND s.key IN ('user_regions', 'user_location')"""
+    ).fetchall()
+
+    per_user = {}
+    for row in rows:
+        settings = per_user.setdefault(row["user_id"], {})
+        if row["key"]:
+            settings[row["key"]] = json.loads(row["value"])
+
+    codes = set()
+    for settings in per_user.values():
+        answered = user_regions(settings)
+        if not answered:
+            return set()
+        codes |= answered
+    return codes
+
+
 def get_user_prefs(conn, user_id):
     s = get_all_settings(conn, user_id)
+    regions = user_regions(s)
     return {
         "location": (s["user_location"] or "").strip().lower(),
+        # The picked codes for anything that has to *show* them, and the
+        # expansion for anything that has to *test* one — expanded once here so
+        # scoring a thousand jobs does not expand it a thousand times.
+        "regions": regions,
+        "reachable": places.reachable_codes(regions),
         "seniority": (s["user_seniority"] or "").strip().lower(),
         "worktype": (s["user_worktype"] or "").strip().lower(),
         "skills": {str(x).strip().lower() for x in s["user_skills"] if str(x).strip()},

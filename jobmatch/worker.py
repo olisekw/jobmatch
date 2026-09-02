@@ -2,9 +2,12 @@
 
     python3 -m jobmatch.worker
 
-Runs the same image as the web app and loops over three jobs: claim the next
-queued scan and run it, close out scans a dead worker left `running`, and
-enqueue a scheduled scan when the last one is older than `SCAN_INTERVAL_HOURS`.
+Runs the same image as the web app and loops over five jobs: claim the next
+queued scan and run it, close out scans a dead worker left `running`, enqueue a
+scheduled scan when the last one is older than `SCAN_INTERVAL_HOURS`, put the
+public demo account back when its last reset is older than `DEMO_RESET_HOURS`,
+and send each user the email digest of their new matches when theirs is older
+than `DIGEST_INTERVAL_HOURS`.
 
 **Scheduling is a query, not a timer.** "Is the newest scan older than the
 interval?" survives a restart, cannot drift, and cannot double-fire if a second
@@ -24,7 +27,7 @@ from datetime import timedelta
 
 import config
 
-from . import db, display, scan
+from . import db, demo, digest, display, obs, scan
 
 log = logging.getLogger("jobmatch.worker")
 
@@ -67,6 +70,37 @@ def maybe_schedule(conn):
         # Something is already queued or running — the schedule is satisfied.
         return None
     return state["scan_id"]
+
+
+def maybe_reset_demo(conn):
+    """Put the demo account back if it is due. Never fatal to the loop.
+
+    Scheduled the same way scans are — a query, not a timer — so it is the
+    worker's idle pass that notices, and a box that was off overnight resets
+    once when it comes back rather than not at all. Wrapped because a broken
+    demo is a cosmetic problem and must not stop the thing that scrapes.
+    """
+    try:
+        return demo.maybe_reset(conn)
+    except Exception:
+        log.exception("demo reset failed — carrying on")
+        return None
+
+
+def maybe_send_digests(conn):
+    """Send any email digest that is due. Never fatal to the loop.
+
+    Here rather than in the web tier for the same reason scanning is: a digest
+    is work nobody is waiting on a page for, and it wants the one process that
+    is allowed to take minutes. `digest.send_due` already swallows a single
+    user's failure; this catches the rest — a mail server having a bad night
+    must not stop the thing that scrapes.
+    """
+    try:
+        return digest.maybe_send(conn)
+    except Exception:
+        log.exception("sending digests failed — carrying on")
+        return []
 
 
 def run(poll_seconds=None, once=False):
@@ -115,6 +149,8 @@ def run(poll_seconds=None, once=False):
 
                 scan.reconcile_orphans(conn)
                 maybe_schedule(conn)
+                maybe_reset_demo(conn)
+                maybe_send_digests(conn)
             if once:
                 break
             _shutdown.wait(poll)
@@ -143,10 +179,8 @@ def _request_shutdown(signum, _frame):
 
 
 def main():
-    logging.basicConfig(
-        level=getattr(logging, config.LOG_LEVEL, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    obs.setup_logging(component="worker")
+    obs.init_sentry()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, _request_shutdown)
     run()

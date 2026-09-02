@@ -13,9 +13,10 @@ import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 import config
-from jobmatch import db, display, scan, worker  # noqa: E402
+from jobmatch import db, display, places, scan, worker  # noqa: E402
 from jobmatch.sources.base import JobSource  # noqa: E402
 
 # Importing the auth suite for its harness also switches rate limiting off
@@ -30,15 +31,19 @@ class FakeSource(JobSource):
     label = "Fake board"
     needs_browser = False
 
-    def __init__(self, count=2, on_search=None):
+    def __init__(self, count=2, on_search=None, listed=None):
         self.count = count
         self.on_search = on_search
         self.searches = 0
+        # What the board *showed* us, as opposed to what was new about it —
+        # the two are the same on a first scan and diverge on every later one.
+        self.listed = count if listed is None else listed
 
     def search(self, page, terms, days, known_ids, ctx):
         self.searches += 1
         if self.on_search:
             self.on_search(ctx)
+        ctx.seen(self.listed)
         return [
             {
                 "source_id": f"fake-{i}", "title": f"Python developer {i}",
@@ -433,6 +438,299 @@ class ScanRouteTests(AuthTestCase):
         self.assertIn('id="btn-scan"', admin_page)
         self.assertNotIn('id="btn-scan"', member_page)
         self.assertIn("window.CAN_SCAN = false", member_page)
+
+
+# ── Telling a quiet board from a quiet day ───────────────────
+
+class SourceYieldTests(QueueTestCase):
+    """Phase 8: a board that returns nothing at all has to say so.
+
+    Zero new jobs is the ordinary outcome of an incremental scan. Zero
+    *listings* means the board is down, blocking us, or redesigned — a failure
+    that raises nothing and finishes green, which is why it needs a test of its
+    own rather than an exception handler.
+    """
+
+    def _state(self):
+        scan.enqueue(self.conn, self.admin)
+        return scan.ScanState(
+            self.conn, scan.claim_next(self.conn, "worker-1"),
+            should_stop=worker._shutdown.is_set,   # wired exactly as the worker wires it
+        )
+
+    def test_a_board_that_lists_nothing_is_reported(self):
+        state = self._state()
+        source = FakeSource(count=0, listed=0)
+
+        scan._search_phase(state, self.conn, None, [source], ["python"], 7)
+
+        self.assertIn("fake", state.source_errors)
+        self.assertIn("no listings", state.source_errors["fake"])
+
+    def test_a_board_with_nothing_new_is_not_reported(self):
+        """The false positive this whole mechanism exists to avoid."""
+        state = self._state()
+        source = FakeSource(count=2)
+        # Everything it has, we already stored — so it yields no stubs at all.
+        scan._search_phase(state, self.conn, None, [source], ["python"], 7)
+        state.source_errors.clear()
+        scan._search_phase(state, self.conn, None, [source], ["python"], 7)
+
+        self.assertEqual(state.source_errors, {}, "a quiet day is not a broken board")
+        self.assertEqual(state.source_seen["fake"], 4, "it answered both times")
+
+    def test_an_adapter_that_reports_nothing_but_returns_stubs_is_trusted(self):
+        state = self._state()
+        source = FakeSource(count=2, listed=0)   # stubs without a seen() report
+
+        scan._search_phase(state, self.conn, None, [source], ["python"], 7)
+
+        self.assertEqual(state.source_errors, {}, "stubs are their own proof of life")
+        self.assertEqual(state.found, 2)
+
+    def test_a_search_that_raises_keeps_its_own_message(self):
+        state = self._state()
+        source = FakeSource(count=0, listed=0)
+        source.on_search = lambda ctx: (_ for _ in ()).throw(RuntimeError("403 Forbidden"))
+
+        scan._search_phase(state, self.conn, None, [source], ["python"], 7)
+
+        self.assertIn("403 Forbidden", state.source_errors["fake"])
+
+    def test_a_cancelled_scan_does_not_accuse_the_board(self):
+        state = self._state()
+        source = FakeSource(count=0, listed=0)
+        # A SIGTERM lands while the board is being searched, so the adapter
+        # comes back empty because we cut it short — not because it is broken.
+        source.on_search = lambda ctx: (worker._shutdown.set(), ctx.stopped())
+
+        scan._search_phase(state, self.conn, None, [source], ["python"], 7)
+
+        self.assertEqual(state.source_errors, {}, "we stopped it; it did not fail")
+
+    def test_the_alert_reaches_the_scan_row_and_the_poller(self):
+        state = self._state()
+        scan._search_phase(state, self.conn, None, [FakeSource(count=0, listed=0)],
+                           ["python"], 7)
+        state.status = "done"
+        scan._finalize(state, self.conn)
+
+        status = scan.current_status(self.conn)
+        self.assertIn("fake", status["source_errors"])
+        self.assertEqual(
+            self.conn.scalar("SELECT status FROM scans WHERE id = :id", {"id": state.scan_id}),
+            "done", "a silent board is a warning about the board, not a failed scan",
+        )
+
+
+class EnrichFailureTests(QueueTestCase):
+    """A detail page that stops parsing must show up as a failed read."""
+
+    class SilentDetailSource(FakeSource):
+        name = "silent"
+        label = "Silent board"
+
+        def fetch_detail(self, page, url):
+            return ""       # the shape a moved selector arrives in
+
+    class FeedSource(FakeSource):
+        name = "feed"
+        label = "Feed board"
+        has_detail_page = False
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.detail_calls = 0
+
+        def fetch_detail(self, page, url):
+            self.detail_calls += 1
+            return ""
+
+    def setUp(self):
+        super().setUp()
+        self._sources = scan.SOURCES
+        self._delays = (config.MIN_DETAIL_DELAY, config.MAX_DETAIL_DELAY)
+        config.MIN_DETAIL_DELAY = config.MAX_DETAIL_DELAY = 0.0
+
+    def tearDown(self):
+        scan.SOURCES = self._sources
+        config.MIN_DETAIL_DELAY, config.MAX_DETAIL_DELAY = self._delays
+        super().tearDown()
+
+    def _pending_job(self, source_name):
+        self.conn.execute(
+            """INSERT INTO jobs (source, source_id, title, link, description)
+               VALUES (:source, '1', 'python developer', 'https://example.test/1', '')""",
+            {"source": source_name},
+        )
+        self.conn.commit()
+        scan.enqueue(self.conn, self.admin)
+        return scan.ScanState(self.conn, scan.claim_next(self.conn, "worker-1"))
+
+    def test_a_description_that_never_arrives_counts_as_failed(self):
+        source = self.SilentDetailSource()
+        scan.SOURCES = {"silent": source}
+        state = self._pending_job("silent")
+
+        scan._enrich_phase(state, self.conn, None)
+
+        self.assertEqual(state.enriched, 0)
+        self.assertEqual(state.failed, 1, "an empty read is a failed read, not a quiet success")
+
+    def test_a_feed_board_is_never_asked_for_a_detail_page(self):
+        source = self.FeedSource()
+        scan.SOURCES = {"feed": source}
+        state = self._pending_job("feed")
+
+        scan._enrich_phase(state, self.conn, None)
+
+        self.assertEqual(source.detail_calls, 0, "there is no detail page to fetch")
+        self.assertEqual(state.failed, 0, "and therefore nothing failed")
+
+
+class EnrichProvidesTests(QueueTestCase):
+    """A source's structured fields beat regex extraction — here too.
+
+    Unreachable until `jobscz`, which is the first board with both a `provides`
+    declaration and a detail page: every earlier one that stated a field was a
+    feed board, so the enrich phase never ran over a column a board had filled
+    in and could overwrite it unconditionally without anybody noticing.
+    """
+
+    class StatingSource(FakeSource):
+        name = "stating"
+        label = "Stating board"
+        provides = frozenset({"worktype"})
+
+        def fetch_detail(self, page, url):
+            # Prose that says nothing about a work mode — which is exactly the
+            # case that used to erase what the card had already stated.
+            return "We are hiring a senior python developer. Django, React."
+
+    def setUp(self):
+        super().setUp()
+        self._sources = scan.SOURCES
+        self._delays = (config.MIN_DETAIL_DELAY, config.MAX_DETAIL_DELAY)
+        config.MIN_DETAIL_DELAY = config.MAX_DETAIL_DELAY = 0.0
+        scan.SOURCES = {"stating": self.StatingSource()}
+
+    def tearDown(self):
+        scan.SOURCES = self._sources
+        config.MIN_DETAIL_DELAY, config.MAX_DETAIL_DELAY = self._delays
+        super().tearDown()
+
+    def _enrich_stated_job(self, worktype="remote", seniority="senior"):
+        self.conn.execute(
+            """INSERT INTO jobs (source, source_id, title, link, description,
+                                 worktype, seniority)
+               VALUES ('stating', '1', 'python developer', 'https://example.test/1', '',
+                       :worktype, :seniority)""",
+            {"worktype": worktype, "seniority": seniority},
+        )
+        self.conn.commit()
+        scan.enqueue(self.conn, self.admin)
+        state = scan.ScanState(self.conn, scan.claim_next(self.conn, "worker-1"))
+        scan._enrich_phase(state, self.conn, None)
+        return self.conn.execute(
+            "SELECT worktype, seniority, skills, description FROM jobs WHERE source_id = '1'"
+        ).fetchone()
+
+    def test_a_field_the_board_stated_survives_the_description(self):
+        row = self._enrich_stated_job()
+        self.assertEqual(row["worktype"], "remote",
+                         "the board said so on its card; the prose does not get a vote")
+
+    def test_a_field_the_board_did_not_state_is_still_extracted(self):
+        """`provides` is a list of what this board sets, not a blanket opt-out."""
+        row = self._enrich_stated_job(seniority=None)
+        self.assertEqual(row["seniority"], "senior", "read out of 'senior' in the prose")
+        self.assertIn("python", row["skills"])
+        self.assertTrue(row["description"], "and the description is always written")
+
+
+# ── Where the shared crawl asks for ──────────────────────────
+
+class CrawlRegionsTests(QueueTestCase):
+    """Phase 8: the crawl narrows its request to where its users can work.
+
+    The pool is shared by everybody, so the only honest answer is the union of
+    every account's reach — and the load-bearing case is the *unplaceable* one:
+    a user we cannot place has to empty the union entirely, because a narrowed
+    crawl would never fetch into the shared pool the job they were owed.
+    """
+
+    def add_user(self, email, **settings):
+        user_id = db.create_user(self.conn, email, "x")
+        self.conn.commit()
+        if settings:
+            db.set_settings(self.conn, user_id, settings)
+        return user_id
+
+    def setUp(self):
+        super().setUp()
+        # The admin the harness creates has answered nothing, which is exactly
+        # the "cannot be placed" case — give them a town so the other cases are
+        # about the users the test actually adds.
+        db.set_settings(self.conn, self.admin, {"user_location": "Bratislava"})
+
+    def test_one_slovak_user_narrows_the_crawl_to_europe(self):
+        self.assertEqual(db.crawl_regions(self.conn), {"SK", "EU"})
+        self.assertEqual(places.covering_region(db.crawl_regions(self.conn)), "EU")
+
+    def test_an_answered_preference_beats_the_town_it_was_derived_from(self):
+        self.add_user("b@example.test", user_location="Bratislava",
+                      user_regions=["NA"])
+        self.assertEqual(db.crawl_regions(self.conn), {"SK", "EU", "NA"})
+        self.assertIsNone(places.covering_region(db.crawl_regions(self.conn)))
+
+    def test_a_user_nobody_can_place_widens_the_crawl_back_to_everywhere(self):
+        self.add_user("nowhere@example.test")   # no town, no regions
+        self.assertEqual(db.crawl_regions(self.conn), set())
+        self.assertIsNone(places.covering_region(db.crawl_regions(self.conn)))
+
+    def test_the_union_is_over_every_account(self):
+        self.add_user("c@example.test", user_regions=["CZ"])
+        self.add_user("d@example.test", user_regions=["PT", "ES"])
+        self.assertEqual(db.crawl_regions(self.conn), {"SK", "EU", "CZ", "PT", "ES"})
+        self.assertEqual(places.covering_region(db.crawl_regions(self.conn)), "EU")
+
+    def test_an_instance_with_no_users_at_all_asks_for_everything(self):
+        self.conn.execute("DELETE FROM user_settings")
+        self.conn.execute("DELETE FROM users")
+        self.conn.commit()
+        self.assertEqual(db.crawl_regions(self.conn), set())
+
+    def test_the_adapter_is_handed_the_regions_by_the_real_scan(self):
+        """End to end: the wiring, not the query — an adapter that reads
+        `ctx.regions` has to receive them from the process that scans."""
+        seen = []
+        source = FakeSource(count=0, listed=1, on_search=lambda ctx: seen.append(ctx.regions))
+        db.set_settings(self.conn, self.admin, {"enabled_sources": ["fake"]})
+
+        with mock.patch.dict(scan.SOURCES, {"fake": source}):
+            scan.enqueue(self.conn, self.admin)
+            scan.run_claimed(self.conn, scan.claim_next(self.conn, "worker-1"))
+
+        self.assertEqual(seen, [frozenset({"SK", "EU"})])
+
+    def test_the_crawl_does_not_narrow_to_whoever_pressed_the_button(self):
+        """Where is the one setting the crawl does *not* take from the admin.
+
+        Everything else about a scan is the admin's (terms, boards, window),
+        because the pool is shared — which is the same reason `where` cannot be
+        theirs: their answer is not the other accounts' answer.
+        """
+        self.add_user("canadian@example.test", user_regions=["CA"])
+        seen = []
+        source = FakeSource(count=0, listed=1, on_search=lambda ctx: seen.append(ctx.regions))
+        db.set_settings(self.conn, self.admin, {"enabled_sources": ["fake"]})
+
+        with mock.patch.dict(scan.SOURCES, {"fake": source}):
+            scan.enqueue(self.conn, self.admin)
+            scan.run_claimed(self.conn, scan.claim_next(self.conn, "worker-1"))
+
+        self.assertEqual(seen, [frozenset({"SK", "EU", "CA"})])
+        self.assertIsNone(places.covering_region(seen[0]), "so no board is narrowed")
 
 
 if __name__ == "__main__":

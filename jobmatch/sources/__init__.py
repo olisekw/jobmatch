@@ -2,6 +2,7 @@
 
 from .arbeitnow import ArbeitnowSource
 from .jobicy import JobicySource
+from .jobscz import JobsCzSource
 from .kariera import KarieraSource
 from .profesia import ProfesiaSource
 from .remoteok import RemoteOkSource
@@ -15,6 +16,7 @@ SOURCES = {
         RemoteOkSource(),
         RemotiveSource(),
         JobicySource(),
+        JobsCzSource(),
         ArbeitnowSource(),
     )
 }

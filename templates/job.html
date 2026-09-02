@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}JobMatch — Job{% endblock %}
+{% block content %}
+
+<p class="crumb"><a href="/jobs">← Back to jobs</a></p>
+<div id="job-view" aria-busy="true">
+  <div class="detail-skeleton" aria-hidden="true">
+    <span class="sk sk-line" style="width:55%; height:1.6rem"></span>
+    <span class="sk sk-line short"></span>
+    <span class="sk sk-line tags"></span>
+    <span class="sk sk-line"></span>
+    <span class="sk sk-line"></span>
+    <span class="sk sk-line" style="width:70%"></span>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+const JOB_ID = {{ job_id }};
+const view = document.getElementById("job-view");
+
+function render(job) {
+  view.removeAttribute("aria-busy");
+  document.title = `${job.title} — JobMatch`;
+  // Descriptions are stored as plain text — `strip_html` collapses the board's
+  // markup on the way in — so this is escaped and laid out, never parsed.
+  const description = (job.description || "").trim();
+
+  view.innerHTML = `
+    <div class="detail-head">
+      <div>
+        <h1>${esc(job.title)}</h1>
+        <p class="subtitle">${jobMeta(job)}</p>
+        ${keyFacts(job)}
+        <div class="tags">${factTags(job)}</div>
+      </div>
+      <div class="detail-score">
+        <div class="score big ${scoreClass(job.match_score)}">${scoreText(job.match_score)}</div>
+        <div class="hint">${job.match_score === null ? "not scored" : "match"}</div>
+      </div>
+    </div>
+
+    <div class="detail-actions">
+      <div class="actions" id="detail-actions">${jobActions(job)}</div>
+      <a class="btn ghost" href="${esc(job.link)}" target="_blank" rel="noopener">
+        Open on ${esc(job.source_label)} ↗</a>
+      <span class="hint">${job.status_label ? "In your list as: " + esc(job.status_label) : ""}</span>
+    </div>
+
+    <h2>How this score is made up</h2>
+    <div class="panel">${breakdownPanel(job.score_breakdown)}</div>
+
+    <h2>Skills found in this posting</h2>
+    <div class="panel">
+      ${(job.skills || "").split(",").map(s => s.trim()).filter(Boolean)
+          .map(s => `<span class="tag">${esc(s)}</span>`).join(" ")
+        || '<span class="hint">None of the skills we look for turned up in this text.</span>'}
+    </div>
+
+    <h2>The posting</h2>
+    <div class="panel">
+      ${description
+        ? `<div class="description">${esc(description)}</div>
+           <p class="hint mt">Plain text as scraped from ${esc(job.source_label)}${
+             job.scraped_display ? ", " + esc(job.scraped_display) : ""}. The original
+             posting keeps its formatting.</p>`
+        : `<p class="hint">The description has not been fetched yet — the next scan
+             will pick it up, and the job stays unscored until it does.</p>`}
+    </div>`;
+
+  document.getElementById("detail-actions").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await api(`/api/jobs/${JOB_ID}/status`, { json: { status: btn.dataset.act } });
+      toast(btn.dataset.act === "applied" ? "Added to your tracker." : "Updated.");
+      load();
+    } catch (err) {
+      toast(err.message);
+      btn.disabled = false;
+    }
+  });
+}
+
+async function load() {
+  try {
+    const data = await api(`/api/jobs/${JOB_ID}`);
+    render(data.job);
+  } catch (err) {
+    showError(view, err.status === 404
+      ? "That job is not in your list — it may have been removed."
+      : err.message, err.status === 404 ? null : load);
+  }
+}
+
+window.onScanFinished = load;
+load();
+</script>
+{% endblock %}

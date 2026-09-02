@@ -10,7 +10,7 @@ import json
 import unicodedata
 from datetime import datetime
 
-from . import db
+from . import db, places
 
 SENIORITY_ORDER = {"junior": 0, "medior": 1, "senior": 2}
 WORKTYPE_ORDER = {"remote": 0, "hybrid": 1, "onsite": 2}
@@ -46,15 +46,36 @@ def _adjacency_component(job_value, user_value, order):
     return 0.0
 
 
-def _location_component(job_location, job_worktype, user_location):
-    if not user_location:
+def _location_component(job, prefs):
+    """Can this person take this job, where it is (0..1, or None for unknown)?
+
+    Two different questions behind one component, because "remote" changes what
+    the word location means:
+
+    - **Remote** is not automatically a fit. A remote job is still hired out of
+      somewhere, and a US-only role is no use to somebody in Bratislava — so it
+      is judged against the places the posting names (`jobs.countries`) and the
+      set of places the user can work in (`prefs["reachable"]`, expanded once
+      by `places`) — two sets, and any overlap is a fit, because a posting
+      hiring in five places is hiring in all five. Worldwide postings satisfy
+      everybody, which is a rule inside that expansion.
+    - **Onsite and hybrid** are judged on the town, as before, because that is a
+      commute and no country rule answers it: Prague is in Europe and is still
+      not a commute from Bratislava.
+
+    A row nobody could place, and a user who has answered neither question, both
+    return None — unknown, and so a hatched bar rather than a zero.
+    """
+    if job["worktype"] == "remote":
+        reachable = prefs.get("reachable")
+        hiring_in = places.stored_codes(job["countries"], job["country"])
+        if not reachable or not hiring_in:
+            return None
+        return 1.0 if reachable & hiring_in else 0.0
+    if not prefs["location"] or not job["location"]:
         return None
-    if job_worktype == "remote":
-        return 1.0
-    if not job_location:
-        return None
-    job_norm = strip_diacritics(job_location).lower()
-    user_norm = strip_diacritics(user_location).lower()
+    job_norm = strip_diacritics(job["location"]).lower()
+    user_norm = strip_diacritics(prefs["location"]).lower()
     return 1.0 if user_norm in job_norm else 0.0
 
 
@@ -70,7 +91,7 @@ def score_job(job, prefs, weights):
     components = {
         "skills": _skills_component(job["skills"], prefs["skills"]),
         "worktype": _adjacency_component(job["worktype"], prefs["worktype"], WORKTYPE_ORDER),
-        "location": _location_component(job["location"], job["worktype"], prefs["location"]),
+        "location": _location_component(job, prefs),
         "seniority": _adjacency_component(job["seniority"], prefs["seniority"], SENIORITY_ORDER),
     }
 
@@ -100,7 +121,8 @@ def rescore_user(conn, user_id):
 
     updates = []
     for job in conn.execute(
-        """SELECT j.id, j.description, j.skills, j.worktype, j.seniority, j.location
+        """SELECT j.id, j.description, j.skills, j.worktype, j.seniority,
+                  j.location, j.country, j.countries
            FROM jobs j JOIN user_jobs uj ON uj.job_id = j.id
            WHERE uj.user_id = :user_id""",
         {"user_id": user_id},

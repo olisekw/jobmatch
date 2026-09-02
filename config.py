@@ -35,6 +35,13 @@ def _env_int(name, default):
         return default
 
 
+def _env_float(name, default):
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
 # ── Paths ────────────────────────────────────────────────────
 DATA_DIR = Path(os.environ.get("DATA_DIR") or BASE_DIR / "data")
 RESUME_DIR = DATA_DIR / "resumes"
@@ -83,6 +90,25 @@ DEBUG = _env_bool("JOBMATCH_DEBUG", False)
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = _env_int("PORT", 8000)
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+# `text` for a human reading a terminal, `json` for one object per line. The
+# default is the local one on purpose: a deployment says so in its compose file
+# (which is also where `JOBMATCH_COMPONENT` labels web vs worker), and deriving
+# it from the bind would make the two entrypoints disagree — gunicorn never
+# reads HOST. Consumed by `jobmatch/obs.py`.
+LOG_FORMAT = os.environ.get("LOG_FORMAT", "text").strip().lower()
+
+# What is running. The deploy workflow passes the commit sha; /healthz reports
+# it and every Sentry event carries it, so a report can be tied to code.
+RELEASE = os.environ.get("RELEASE") or "dev"
+
+# Unset is the normal case and turns error reporting off completely. Nothing
+# about monitoring may be a startup dependency — see `obs.init_sentry`.
+SENTRY_DSN = (os.environ.get("SENTRY_DSN") or "").strip()
+SENTRY_ENVIRONMENT = os.environ.get("SENTRY_ENVIRONMENT") or "production"
+# 0 = errors only, which is what fits a free-tier quota: tracing samples every
+# request and spends the month's events in a day.
+SENTRY_TRACES_SAMPLE_RATE = _env_float("SENTRY_TRACES_SAMPLE_RATE", 0.0)
 
 # Serving on anything but loopback is a deployment. Several defaults below
 # tighten themselves off this, so a deployed instance is safe without being
@@ -148,8 +174,58 @@ SCAN_STALE_SECONDS = _env_int("SCAN_STALE_SECONDS", 90)
 # exactly what Phase 4 exists to prevent.
 SCAN_IN_PROCESS = _env_bool("SCAN_IN_PROCESS", True)
 
-# Read-only public demo (Phase 7). Declared here so deployment config has one home.
+# ── The public demo (Phase 7) ────────────────────────────────
+# On means the landing page offers a seeded account anyone can sign into and
+# actually use — see `jobmatch/demo.py` for why it is not read-only. Off means
+# the account is neither created nor offered, which is the default because
+# every instance except the public one is somebody's real job search.
 DEMO_MODE = _env_bool("DEMO_MODE", False)
+
+# The demo's credentials are published on the landing page on purpose: the
+# password is not protecting anything, and a recruiter who wants to see the
+# login form should be able to use it. Overridable so a fork's demo is not
+# reachable with a password that is in this repository.
+DEMO_EMAIL = (os.environ.get("DEMO_EMAIL") or "demo@jobmatch.app").strip().lower()
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD") or "demo-account-please"
+
+# How often the worker puts the demo back. 0 turns the schedule off and leaves
+# `python3 -m jobmatch.demo` as the only way to reset it.
+DEMO_RESET_HOURS = _env_int("DEMO_RESET_HOURS", 24)
+
+# ── Email digest (Phase 8) ───────────────────────────────────
+# Unset SMTP_HOST is the normal case and turns digests off completely: the
+# worker skips the pass, Settings says the instance cannot send mail, and
+# nothing about a missing relay is a startup dependency — the same shape as
+# SENTRY_DSN above.
+SMTP_HOST = (os.environ.get("SMTP_HOST") or "").strip()
+SMTP_PORT = _env_int("SMTP_PORT", 587)
+SMTP_USER = (os.environ.get("SMTP_USER") or "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
+# 465 is implicit TLS (encrypted before a byte of SMTP), 587 is plaintext until
+# STARTTLS upgrades it. Each default follows from the other, so naming the port
+# is normally the only thing a relay needs told.
+SMTP_SSL = _env_bool("SMTP_SSL", SMTP_PORT == 465)
+SMTP_STARTTLS = _env_bool("SMTP_STARTTLS", not SMTP_SSL)
+SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 30)
+
+# Who the digest comes from. Defaults to the SMTP username because that is the
+# address a relay will let us send as; a different From: usually needs the
+# domain to be verified with the provider first.
+MAIL_FROM = (os.environ.get("MAIL_FROM") or SMTP_USER).strip()
+MAIL_FROM_NAME = os.environ.get("MAIL_FROM_NAME") or "JobMatch"
+
+# Absolute base for the links in an email — `url_for` needs a request and a
+# digest is built by the worker, which has none. Unset means the digest links
+# each job straight to the board it came from instead of into the app.
+PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+# How often a user can get one. 0 turns the schedule off and leaves
+# `python3 -m jobmatch.digest` as the only way to send one.
+DIGEST_INTERVAL_HOURS = _env_int("DIGEST_INTERVAL_HOURS", 24)
+
+# How many jobs one email carries. The rest are not marked as sent, so they
+# lead the next digest rather than being lost — see `jobmatch/digest.py`.
+DIGEST_MAX_JOBS = _env_int("DIGEST_MAX_JOBS", 10)
 
 # ── Web scraping ─────────────────────────────────────────────
 # Politeness delays between requests (seconds)

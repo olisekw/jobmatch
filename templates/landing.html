@@ -1,0 +1,222 @@
+{#- One screenshot, in whichever scheme the reader is already in. The app has a
+   dark mode and a landing page that only ever shows the light one would be
+   advertising a product that does not exist. -#}
+{% macro shot(name, alt, caption, cls="") -%}
+<figure class="shot {{ cls }}">
+  <picture>
+    <source srcset="{{ url_for('static', filename='screens/' ~ name ~ '-dark.png') }}"
+            media="(prefers-color-scheme: dark)">
+    <img src="{{ url_for('static', filename='screens/' ~ name ~ '.png') }}"
+         alt="{{ alt }}" loading="lazy">
+  </picture>
+  <figcaption>{{ caption }}</figcaption>
+</figure>
+{%- endmacro -%}
+{# The public front door — what somebody who has never signed in sees at `/`.
+
+   Standalone rather than extending base.html, for the same reason auth.html is:
+   there is no app nav to show a visitor, and none of the app's JavaScript is
+   any use here. This page has no script tag at all. -#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobMatch — every job on six boards, scored against your CV</title>
+  <meta name="description" content="JobMatch scans Slovak and international job
+        boards, scores every posting 0–100 against your CV and preferences, and
+        tracks where you applied.">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="landing">
+  <a class="skip-link" href="#what">Skip to content</a>
+
+  <header class="landing-bar">
+    <span class="brand">JobMatch</span>
+    <nav class="landing-links">
+      <a href="{{ url_for('page_login') }}">Sign in</a>
+      {% if allow_signup %}
+        <a class="btn small" href="{{ url_for('page_signup') }}">Create an account</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main>
+    {% with messages = get_flashed_messages() %}
+      {% for message in messages %}
+        <p class="form-error" role="alert">{{ message }}</p>
+      {% endfor %}
+    {% endwith %}
+
+    <section class="hero" id="top">
+      <h1>Every job on six boards, scored against your CV.</h1>
+      <p class="lede">
+        JobMatch scans Slovak and international job boards on a schedule, reads
+        each posting, and scores it 0–100 against your skills, your location and
+        the kind of work you want. Then it keeps track of where you applied.
+      </p>
+
+      <div class="cta">
+        {% if demo_enabled %}
+          {# A POST, not a link: it starts a session, and a GET that signs
+             somebody in can be triggered from anywhere on the internet. #}
+          <form method="post" action="{{ url_for('do_demo_login') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn big" type="submit">Open the live demo</button>
+          </form>
+        {% endif %}
+        {% if allow_signup %}
+          <a class="btn big ghost" href="{{ url_for('page_signup') }}">Create an account</a>
+        {% else %}
+          <a class="btn big ghost" href="{{ url_for('page_login') }}">Sign in</a>
+        {% endif %}
+      </div>
+
+      {% if demo_enabled %}
+        <p class="hint demo-note">
+          No signup. The demo is a real account with a seeded CV and a tracker
+          you can move things around in — it is put back to how it started
+          every {{ demo_reset_hours }} hours. Sign in as
+          <code>{{ demo_email }}</code> / <code>{{ demo_password }}</code> if
+          you would rather use the form.
+        </p>
+      {% endif %}
+    </section>
+
+    {{ shot("jobs",
+        "The Jobs page: a filtered list of postings, each with a 0–100 match
+         score and the four bars it is made of.",
+        "The Jobs page. Every row carries its score and the four components
+         behind it.") }}
+
+    <section id="what">
+      <h2>What it does</h2>
+      <div class="cols">
+        <div>
+          <h3>Scans six boards, once</h3>
+          <p>
+            Profesia.sk and Kariéra.sk for Slovakia, Remote OK, Remotive, Jobicy
+            and Arbeitnow for everything remote. One scheduled crawl serves every
+            account — nobody's signup makes the boards get hit harder.
+          </p>
+        </div>
+        <div>
+          <h3>Reads the posting</h3>
+          <p>
+            Skills, remote or hybrid or on-site, seniority, employment type and
+            salary are pulled out of the ad — from the board's own fields where
+            it has them, and from the text where it does not.
+          </p>
+        </div>
+        <div>
+          <h3>Tracks the applications</h3>
+          <p>
+            Applied → interview → offer → rejected, with a dated note on every
+            move. Marking a job applied on the Jobs page is what puts it in the
+            tracker; nothing is typed twice.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="scoring">
+      <h2>How the score works</h2>
+      <p class="lede">
+        Four components, each 0–1, weighted by how much you care about them —
+        and the weights are yours to move.
+      </p>
+
+      <pre class="formula"><code>score = 100 × Σ(wᵢ · cᵢ) / Σ(wᵢ)</code></pre>
+      <p class="formula-note">…summed over the components that are
+        <b>known</b> — see below.</p>
+
+      <dl class="components">
+        <dt>Skills</dt>
+        <dd>How much of what the ad asks for is on your CV.</dd>
+        <dt>Work type</dt>
+        <dd>Remote, hybrid or on-site against what you said you want.</dd>
+        <dt>Location</dt>
+        <dd>Where the job is — and a remote job is everywhere.</dd>
+        <dt>Seniority</dt>
+        <dd>Junior, medior or senior against where you are.</dd>
+      </dl>
+
+      <div class="callout">
+        <h3>Missing data is not a penalty</h3>
+        <p>
+          Plenty of ads never say whether the role is hybrid, or what seniority
+          they mean. The sum runs over the components that could be read, so a
+          vague posting is scored on what it <em>did</em> say instead of being
+          pushed down the list for being vague. The interface says so too: an
+          unknown component is a hatched bar, never an empty one.
+        </p>
+        <h3>“Worth a look” is derived, never stored</h3>
+        <p>
+          A job is a match when its score clears your threshold and you have not
+          triaged it yet. Nothing writes that down — move a weight or the
+          threshold and the whole list re-sorts on the spot, with no batch job
+          and nothing thrown away.
+        </p>
+      </div>
+    </section>
+
+    <div class="shot-pair">
+      {{ shot("dashboard",
+          "The dashboard: counts of matched, unreviewed, applied and collected
+           jobs, above the best current matches.",
+          "The dashboard, and when the boards were last scanned.") }}
+      {{ shot("job",
+          "A job detail page with the full description and the score broken
+           into four labelled bars.",
+          "A posting, with the score opened up.") }}
+      {{ shot("tracker",
+          "The tracker: one row per application with its status, the date it
+           was sent and a note.",
+          "The tracker, one row per application.") }}
+      {{ shot("settings",
+          "Settings: four weight sliders, a match threshold and the CV upload.",
+          "Settings — the sliders that move every score.") }}
+    </div>
+
+    <section class="built">
+      <h2>How it is built</h2>
+      <p class="lede">
+        Flask and Postgres, server-rendered pages and vanilla JavaScript. No
+        front-end framework, and the only heavy dependency is the browser one
+        board needs.
+      </p>
+      <ul class="build-list">
+        <li><b>Shared crawl, per-user everything else.</b> The job pool is one
+          table every account reads; scores, statuses, settings and applications
+          hang off <code>user_id</code>. It is what keeps a hundred signups from
+          becoming a hundred scrapers.</li>
+        <li><b>The scanner is its own process.</b> Scans live in a database-backed
+          queue, claimed by a worker container with a conditional update, with
+          live progress and cancel read from the row rather than from memory —
+          so any web process can answer “how is it going?”.</li>
+        <li><b>Scheduling is a query, not a timer.</b> “Is the last scan older
+          than the interval?” survives a restart, cannot drift and cannot
+          double-fire.</li>
+        <li><b>A board is one file.</b> Each adapter implements one interface and
+          declares which fields it provides, so a board's own structured data
+          always beats the regex fallback.</li>
+        <li><b>Deployed as four containers</b> — web, worker, Postgres and Caddy
+          for TLS — with nightly backups that have actually been restored.</li>
+      </ul>
+      <p class="mt">
+        <a href="https://github.com/olisekw/jobmatch">Source on GitHub →</a>
+      </p>
+    </section>
+  </main>
+
+  <footer class="landing-foot">
+    <span>JobMatch</span>
+    <span>
+      <a href="{{ url_for('page_login') }}">Sign in</a>
+      {% if allow_signup %} · <a href="{{ url_for('page_signup') }}">Create an account</a>{% endif %}
+      {% if demo_enabled %} · <a href="#top">Try the demo</a>{% endif %}
+    </span>
+  </footer>
+</body>
+</html>

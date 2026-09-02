@@ -32,6 +32,20 @@ APPLICATION_STATUS = {
     "withdrawn": "Withdrawn",
     "no_response": "No response",
 }
+# The tracker's views. A person tracking applications thinks in four states,
+# not six: "applied" and "no response" are the same wait, and which of the two
+# a row happens to be in is not something anybody filters on. Defined here
+# rather than in the page so the tabs, their counts and the status dropdown
+# under them cannot drift apart on what a group contains.
+APPLICATION_GROUPS = [
+    ("all", "Everything", ()),
+    ("waiting", "Waiting to hear", ("applied", "no_response")),
+    ("interview", "Interviews", ("interview",)),
+    ("offer", "Offers", ("offer",)),
+    ("rejected", "Rejected", ("rejected",)),
+    ("withdrawn", "Withdrawn", ("withdrawn",)),
+]
+
 SCAN_STATUS = {
     "queued": "Queued",
     "running": "Running",
@@ -69,6 +83,19 @@ def label(mapping, value):
 def options(mapping):
     """A mapping as [{value, label}], for building a <select> on the client."""
     return [{"value": value, "label": text} for value, text in mapping.items()]
+
+
+def application_groups():
+    """`APPLICATION_GROUPS` as JSON the tracker can render its tabs from.
+
+    "Everything" carries no statuses; the client reads an empty list as "no
+    filter" rather than "matches nothing", which is why it is not written out
+    as every status there is.
+    """
+    return [
+        {"value": value, "label": text, "statuses": list(statuses)}
+        for value, text, statuses in APPLICATION_GROUPS
+    ]
 
 
 # ── Dates and times ──────────────────────────────────────────
