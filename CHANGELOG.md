@@ -3,6 +3,12 @@
 One line per change, newest first. The `/roadmap-task` skill appends a sentence here after
 each completed roadmap task. The plan lives in `ROADMAP.md`; the rationale in `PROJECT.md`.
 
+## 2026-09-02
+- **Phase 7 and Phase 8 are now in the repository** — 71 files committed as `019359d` and
+  merged to `main`, which until today held none of the landing page, demo, digest, places,
+  jobs.cz adapter or FX conversion that `deploy.yml` would have shipped without them; all
+  four CI jobs green, and `phase6-ui`/`origin/saas` retired so one branch means one thing.
+
 ## 2026-08-29
 - **Planned Phase 9 — the launch**, the only unfinished work left in the roadmap: it found
   that Phases 7 and 8 are not in the repository at all (62 uncommitted files against a

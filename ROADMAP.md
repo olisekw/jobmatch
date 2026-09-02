@@ -695,7 +695,7 @@ and 8 are not in the repository at all.
   range and an hourly unit. Our parse is faithful to the ad, which is the invariant, and no
   currency rule can fix an ad that lies about its own period.
 
-## Phase 9 — 🚢 Cross the ship line (planned 2026-08-29, not started)
+## Phase 9 — 🚢 Cross the ship line (planned 2026-08-29; item 1 done 2026-09-02, 2–10 open)
 
 Phase 8 asked that the next phase be planned **after** deployment, "against a deployed thing
 rather than an imagined one". This phase does not break that rule: it is *the deployment*, not
@@ -705,14 +705,15 @@ the box". Post-launch ideas stay in `## Later` below, unplanned on purpose.
 
 Two things found while planning it, both of which change what this phase has to contain:
 
-- **The last two phases are not in the repository.** `main`, `origin/saas` and the working
-  branch `phase6-ui` all point at the same commit (`6b62e1f`), and 62 files are uncommitted —
-  which is Phase 7 and Phase 8 in their entirety: `landing.html`, `job.html`, `digest.py`,
+- **The last two phases were not in the repository** (fixed by item 1 on 2026-09-02).
+  `main`, `origin/saas` and the working branch `phase6-ui` all pointed at the same commit
+  (`6b62e1f`), and 62 files were uncommitted —
+  which was Phase 7 and Phase 8 in their entirety: `landing.html`, `job.html`, `digest.py`,
   `mail.py`, `obs.py`, `places.py`, `demo.py`, `sources/jobscz.py`, the FX salary work and ten
   test files. `deploy.yml` deploys the commit CI went green on, on `main`. So the pipeline as
-  it stands would put a JobMatch on the box with no landing page, no demo, no digest, no
+  it stood would have put a JobMatch on the box with no landing page, no demo, no digest, no
   places, no Czech board and no currency conversion — and until then a laptop's working tree
-  is the only copy of a third of this project.
+  was the only copy of a third of this project.
 - **It is six repository secrets, not four.** Phase 5 and Phase 8 both say "the four
   repository secrets in `DEPLOY.md §6`"; §6 lists six and `deploy.yml` reads all six —
   `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`, `DEPLOY_HOST_KEY`,
@@ -723,7 +724,7 @@ Items 1 and 3 need no box and should go first; 2 needs no box either and is wort
 *before* one exists, because Let's Encrypt rate-limits failure. Everything from 4 down is
 gated on an account and a domain, which is Oliver's to buy and nobody else's.
 
-- [ ] **1. Get Phase 7 and Phase 8 into `main`.** Review the 62 changed files, commit them on
+- [x] **1. Get Phase 7 and Phase 8 into `main`.** Review the 62 changed files, commit them on
   a branch, and merge — the ordinary flow, but it is the first item in this phase because
   every later one deploys whatever `main` holds, and because a green suite in an uncommitted
   tree protects nothing. Check `.gitignore` still excludes the database, `data/` and `.env`,
@@ -732,6 +733,16 @@ gated on an account and a domain, which is Oliver's to buy and nobody else's.
   thing. **Verify:** `git status` clean, `origin/main` at the new commit, the `test`,
   `postgres` and `image` jobs of `ci.yml` all green on it — the image job in particular, since
   nothing has built the Dockerfile since `jobscz` added a Playwright path to a *detail* fetch.
+  → Landed as `019359d` on `main` (71 files, +10 124/−602): Phase 7's landing page,
+  job page, favicon and the ten screenshots with `tools/screenshots.py`, and Phase 8's
+  `demo`, `digest`, `mail`, `obs`, `places`, `jobscz` and the FX salary work. All four
+  CI jobs green on it — `test (3.11)`, `test (3.12)`, `postgres` and, the one that had
+  never run since `jobscz`, `image`. Nothing personal rode along: `.env`, `data/jobmatch.db`
+  and `data/resumes/2.pdf` (a real uploaded CV) are all still ignored, and the screenshots
+  were checked by eye rather than assumed — they are shot through the seeded demo account,
+  so what they show is the same demo data a stranger sees. The three names are now one:
+  `phase6-ui` deleted, `origin/saas` deleted, and `saas` dropped from `ci.yml`'s push
+  triggers so the config stops naming a branch that no longer exists.
 - [ ] **2. Exercise `caddy` without a domain.** Phase 5 recorded that `caddy` "cannot be tested
   locally and is verified on the box or not at all". That is true only of the ACME challenge.
   Caddy has its own local CA (`tls internal`) and Let's Encrypt has a staging endpoint
