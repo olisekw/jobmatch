@@ -3,6 +3,13 @@
 One line per change, newest first. The `/roadmap-task` skill appends a sentence here after
 each completed roadmap task. The plan lives in `ROADMAP.md`; the rationale in `PROJECT.md`.
 
+## 2026-09-06
+- **Brought `PROJECT.md` back in line with the tree** — six adapters became seven, 318 tests 433, 2375 jobs 6842, and the key decision **"No FX conversion for salary"**, reversed a week ago, was replaced by the one that actually holds; the remote-work bullet still described a single `jobs.country`, and the rate-limit rough edge is a live defect rather than a hypothetical because the image ships two gunicorn workers.
+- **Exercised `caddy` locally against the shipped Caddyfile** and found its body cap was dead
+  config — a 25 MB POST was being rejected by Flask *after* crossing the proxy, so a
+  Content-Length matcher now rejects it at the edge with nothing reaching `web`, and
+  `{$CADDY_GLOBAL_OPTIONS}` lets a laptop or a staging ACME run without editing the file.
+
 ## 2026-09-02
 - **Phase 7 and Phase 8 are now in the repository** — 71 files committed as `019359d` and
   merged to `main`, which until today held none of the landing page, demo, digest, places,

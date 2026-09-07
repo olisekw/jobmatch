@@ -109,6 +109,12 @@ services:
       # Caddy reads these out of the Caddyfile; ACME needs both.
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      # Extra lines for the Caddyfile's global block, empty on a real
+      # deployment. It exists so that running against a name with no public
+      # DNS (`local_certs`) or against Let's Encrypt staging for a first
+      # issuance (`acme_ca ...`) needs no edit to deploy/Caddyfile — see the
+      # comment there.
+      CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       # The issued certificates. Losing this volume means re-issuing, and

@@ -3,9 +3,18 @@
 #
 # DOMAIN and ACME_EMAIL come from the environment (docker-compose.yml passes
 # them through from .env), so this file is the same on every instance.
-
 {
 	email {$ACME_EMAIL}
+
+	# Empty in production, and that is the point: the two situations that need
+	# a different certificate authority get one from the environment instead of
+	# from an edit to this file, so what runs on the box is what is in git.
+	#   local_certs        — a laptop, where the name resolves nowhere public
+	#   acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+	#                      — the first issuance on a new box, where a mistake
+	#                        should cost a staging cert and not a week of the
+	#                        real rate limit
+	{$CADDY_GLOBAL_OPTIONS}
 }
 
 {$DOMAIN} {
@@ -22,8 +31,32 @@
 		-Server
 	}
 
-	# A CV upload is capped at 16 MB by MAX_CONTENT_LENGTH; rejecting a larger
-	# body here means it never crosses the proxy.
+	# A CV upload is capped at 16 MB by MAX_CONTENT_LENGTH. Rejecting a bigger
+	# body here means it never reaches `web` at all.
+	#
+	# It takes both of the directives below, and `request_body` alone was not
+	# enough — it was measured doing nothing. `max_size` only errors when the
+	# upstream *reads* past the limit, and Flask never does: over
+	# MAX_CONTENT_LENGTH it refuses on the Content-Length alone, without
+	# touching the body. So a 25 MB POST was answered 413 by Flask, having
+	# crossed the proxy exactly as this comment used to claim it could not.
+	#
+	# The matcher is what rejects at the edge, before a byte of body is read.
+	# It has to be one expression rather than a `header` matcher next to an
+	# `expression` one: matchers in a set are evaluated independently, so the
+	# header check does not stop the `int()` from running, and `int("")` on
+	# every request without a Content-Length — i.e. every GET — is a 500 for
+	# the whole site. Inside CEL, `&&` absorbs the error and it is safe.
+	# Keep the two numbers below the same; `int()` needs the byte count.
+	@toolarge expression `header({'Content-Length': '*'}) && int({http.request.header.content-length}) > 20971520`
+	respond @toolarge "Request body too large" 413
+
+	# Still worth keeping, and it does fire: a chunked request has no
+	# Content-Length for the matcher above to read, so this is the only limit
+	# that applies to one — measured, a 25 MB chunked form was 413'd here with
+	# `web` never logging it. It only fires once the upstream reads that far,
+	# which for a chunked body means Flask parsing the form; a chunked body
+	# rejected before it is parsed is simply never read.
 	request_body {
 		max_size 20MB
 	}

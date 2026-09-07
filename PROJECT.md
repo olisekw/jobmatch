@@ -32,15 +32,27 @@ things drove that change, and both are still the shape of the codebase:
   bar reads as a zero.
 - **Remote is a work permit, on-site is a commute.** The location component
   carries two rules because "remote" changes what the word means. On-site and
-  hybrid are matched on the town; remote is matched on `jobs.country` against
-  the set of places the user said they can work in, so a US-only remote role no
-  longer scores full marks for somebody in Bratislava — which it did, ranking
-  level with the EU roles it should have been losing to. The preference is its
-  own setting rather than a reading of `user_location`, because "where I live"
-  and "where I may work" are different questions, and it is *derived* from the
-  town when unanswered (your country plus its region) rather than defaulted to
-  Europe for everybody. One expansion in `places.reachable_codes()` answers it
-  for the scorer, the Jobs filter and the digest at once.
+  hybrid are matched on the town; remote intersects the places the *posting*
+  names with the set of places the user said they can work in, so a US-only
+  remote role no longer scores full marks for somebody in Bratislava — which it
+  did, ranking level with the EU roles it should have been losing to. The
+  preference is its own setting rather than a reading of `user_location`,
+  because "where I live" and "where I may work" are different questions, and it
+  is *derived* from the town when unanswered (your country plus its region)
+  rather than defaulted to Europe for everybody. One expansion in
+  `places.reachable_codes()` answers it for the scorer, the Jobs filter and the
+  digest at once.
+- **A posting hiring in five places names five places.** Reach is a question
+  about a *set*, so it is not asked of one column: `places.codes()` returns
+  every place a listing names and packs them into `jobs.countries`
+  (`|EU|US|CA|`, delimited both ends so `|US|` cannot match inside another
+  code), while `places.primary()` picks the single code `jobs.country` prints on
+  a card. One column could not hold five answers, and first-match-wins stored
+  "LATAM, Europe, USA, Canada, APAC" as `US` — unreachable for a European
+  though it says Europe out loud. The scorer (`places.stored_codes`) and the
+  Jobs filter (`places.COUNTRIES_SQL`, which falls back to `country`) ask the
+  set the same question, so the list and the score cannot disagree about where
+  you can work.
 - **Runtime settings live in the DB, not code.** `config.py` holds the
   environment (deployment) and code-level constants (scrape delays, timeouts,
   regex patterns); scoring weights, match threshold, search terms and the user
@@ -92,34 +104,53 @@ things drove that change, and both are still the shape of the codebase:
 - **CSV → SQLite migration path kept, not deleted.** `migrate_csv.py` and
   `backfill.py` exist as idempotent, read-only-toward-CSV one-time migration
   tools from an earlier CSV-based version of the app.
-- **No FX conversion for salary.** Hourly-rate derivation divides by a fixed
-  hours factor (day÷8, week÷40, month÷160, year÷1920) but keeps the original
-  currency — deliberately not attempting currency normalization.
+- **Comparing two salaries takes one period and one currency.** A board's
+  amount, currency and period are stored exactly as written and read back that
+  way; the comparison is derived on the way *out*, in euros an hour, by
+  `salary.hourly_eur()` and its SQL mirror `HOURLY_EUR_SQL` — one hours factor
+  (day÷8, week÷40, month÷160, year÷1920) and one rate table, so the number
+  the pay filter selects on and the number the card prints cannot drift. This
+  reverses an earlier decision to normalize the period only, which was half an
+  answer: it made a monthly Slovak wage comparable to an annual American salary
+  and still ranked 140 000 Kč level with 140 000 €, and the live pool's entire
+  top five was Czech on the strength of koruna's extra digits. The rates in
+  `salary.EUR_RATES` are approximate and dated on purpose — nothing stored reads
+  them, so refreshing them rewrites no row and moves no score — and a currency
+  with no rate is **unknown, not par**: it sorts last and fails a floor, exactly
+  like a posting that quotes nothing, because a euro figure for a wage nobody
+  quoted in euros is worse than no ranking at all.
 
 ## Current state
 
-**Built:** everything through Phase 7 of `ROADMAP.md`, plus three of Phase 8's
-items. A Flask app with six pages (landing, dashboard, jobs, job detail,
-tracker, settings) and a JSON API;
-real accounts on argon2id with CSRF, rate limits and tenant isolation; six
-source adapters; a scan worker over the `scans` queue with live progress,
-cancel and orphan reconciliation; scoring, extraction, salary/date parsing and
-PDF CV parsing; application tracking with a status pipeline and event history;
-a containerized deployment (`web`/`worker`/`db`/`caddy`) with tested backups; a
-public landing page and a seeded demo account; `/healthz` and JSON logging.
+**Built:** every phase of `ROADMAP.md` through Phase 8, plus the first two items
+of Phase 9. A Flask app with six pages (landing, dashboard, jobs, job detail,
+tracker, settings) and a JSON API; real accounts on argon2id with CSRF, rate
+limits and tenant isolation; seven source adapters (`profesia`, `kariera`,
+`jobscz`, `remoteok`, `remotive`, `jobicy`, `arbeitnow`); a scan worker over the
+`scans` queue with live progress, cancel and orphan reconciliation; scoring,
+extraction, country derivation, salary/date parsing and PDF CV parsing;
+application tracking with a status pipeline and event history; an email digest
+over its own SMTP transport; a containerized deployment
+(`web`/`worker`/`db`/`caddy`) with tested backups; a public landing page and a
+seeded demo account; `/healthz` and JSON logging.
 
-**Data:** the local `data/jobmatch.db` is live and populated — 2375 jobs, used
+**Data:** the local `data/jobmatch.db` is live and populated — 6842 jobs, used
 rather than scaffolded. Every risky migration has been verified against a
 `.backup()` copy of it, which is what caught the bugs unit tests could not.
 
-**Tests:** 318, of which 12 skip themselves without a Postgres server.
+**Tests:** 433, of which 12 skip themselves without a Postgres server.
 
 **Known rough edges:**
 - **There is no box.** Phase 5 is built and verified locally but no VPS or
-  domain exists, so `caddy`, TLS and `deploy.yml` have never run, and there is
-  no public URL. That is an account and a domain, not code.
-- `IDEA.md` is still empty. It wants one honest paragraph, in the author's own
-  words, on the original itch — nobody else can write it.
+  domain exists, so there is no public URL, `deploy.yml` has never run, and
+  neither has a real ACME challenge. `caddy` itself is no longer in that
+  bucket: Phase 9 exercised the shipped Caddyfile on a laptop against Caddy's
+  own CA — a verified TLS 1.3 handshake, the four security headers, the
+  `http://` → `https://` redirect, and `X-Real-IP` arriving such that
+  Flask-Limiter counts the client and not the proxy. What is left is an account
+  and a domain, not code.
+- `IDEA.md` is one line, not yet the paragraph it asks for — the placeholder
+  comment is still above it. Only the author can finish it.
 - Profesia.sk scraping depends on Playwright + a real Chromium install, the
   heaviest dependency in the stack, and it is still the adapter most likely to
   break. It can no longer break *silently* — Phase 8 made every adapter report
@@ -129,6 +160,8 @@ rather than scaffolded. Every risky migration has been verified against a
 - **The digest has never met a real mail relay.** It has been run end to end
   against a socket on localhost, so the code path is proven; deliverability
   (SPF, DKIM, spam folders) needs the box, like TLS.
-- Rate-limit storage is in-memory and per-process, which is honest for one
-  gunicorn worker and wrong for two — `RATELIMIT_STORAGE_URI` is where a redis
-  URL goes if that day comes.
+- **Rate-limit storage is in-memory and per-process, and the image ships two
+  gunicorn workers** — so this is a live defect, not a hypothetical one. It was
+  measured through the proxy: 30 CSRF-valid POSTs against a 10/min limit got 20
+  through before the first 429, because each worker counts its own. A shared
+  store is the fix, and `RATELIMIT_STORAGE_URI` is where a redis URL goes.

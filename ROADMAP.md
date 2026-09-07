@@ -247,9 +247,12 @@ Postgres is the drop-in alternative — same Dockerfile, only this phase changes
   base layer that a later `rm` only hides. `PLAYWRIGHT_VERSION` pins the image tag and the pip
   package together; they disagree and Chromium is "not found".
 - ~~`docker-compose.yml`: `web`, `worker`, `db` (Postgres 16), `caddy` (automatic TLS).~~
-  `db`+`web`+`worker` were brought up and verified (below). **`caddy` is the one service still
-  unexercised** — it needs a real domain to complete an ACME challenge, so it cannot be tested
-  locally and is verified on the box or not at all.
+  `db`+`web`+`worker` were brought up and verified (below). ~~**`caddy` is the one service
+  still unexercised** — it needs a real domain to complete an ACME challenge, so it cannot be
+  tested locally and is verified on the box or not at all.~~ Wrong, and expensively so: only
+  the ACME challenge itself needs a real domain, and everything else in `deploy/Caddyfile`
+  was exercised on a laptop by Phase 9 item 2 — which is how the body cap was caught doing
+  nothing at all. What is still box-only is the challenge, and that is item 5.
 - **Still open:** provision the box (SSH keys only, ufw, unattended-upgrades, fail2ban) and
   point a domain at it. Written up step by step in `DEPLOY.md §1`; needs an account, not code.
 - ~~Flip `DATABASE_URL` to Postgres; fix the known dialect gaps.~~ The `datetime('now')` /
@@ -695,7 +698,7 @@ and 8 are not in the repository at all.
   range and an hourly unit. Our parse is faithful to the ad, which is the invariant, and no
   currency rule can fix an ad that lies about its own period.
 
-## Phase 9 — 🚢 Cross the ship line (planned 2026-08-29; item 1 done 2026-09-02, 2–10 open)
+## Phase 9 — 🚢 Cross the ship line (planned 2026-08-29; items 1–3 done, 4–10 open)
 
 Phase 8 asked that the next phase be planned **after** deployment, "against a deployed thing
 rather than an imagined one". This phase does not break that rule: it is *the deployment*, not
@@ -743,7 +746,7 @@ gated on an account and a domain, which is Oliver's to buy and nobody else's.
   so what they show is the same demo data a stranger sees. The three names are now one:
   `phase6-ui` deleted, `origin/saas` deleted, and `saas` dropped from `ci.yml`'s push
   triggers so the config stops naming a branch that no longer exists.
-- [ ] **2. Exercise `caddy` without a domain.** Phase 5 recorded that `caddy` "cannot be tested
+- [x] **2. Exercise `caddy` without a domain.** Phase 5 recorded that `caddy` "cannot be tested
   locally and is verified on the box or not at all". That is true only of the ACME challenge.
   Caddy has its own local CA (`tls internal`) and Let's Encrypt has a staging endpoint
   (`acme_ca`), and between them everything in `deploy/Caddyfile` except the real challenge can
@@ -754,13 +757,66 @@ gated on an account and a domain, which is Oliver's to buy and nobody else's.
   the Caddyfile does not write one; and — the one that actually matters for correctness —
   `X-Real-IP`/`X-Forwarded-For` arriving such that Flask-Limiter counts the client and not the
   `caddy` container, which is a rate limit that either works or silently protects nothing.
-- [ ] **3. Correct `PROJECT.md`, which today's work made wrong.** It says six source adapters
+  → All five verified on a real four-container stack against the **shipped** Caddyfile,
+  driven over `curl --resolve jobmatch.test` so no `/etc/hosts` entry was needed: TLS 1.3 +
+  HTTP/2 with the chain actually **verified** against Caddy's local root (`--cacert`, not
+  `-k`); the four headers exact on the landing page and `Server` absent; a 308 to
+  `https://` preserving path and query. The file itself gained one line —
+  `{$CADDY_GLOBAL_OPTIONS}` in the global block, empty in production — so `local_certs` here
+  and item 5's staging `acme_ca` both come from the environment and **the box never needs
+  this file edited**. Also silenced the "input is not formatted" warning Caddy logged on
+  every boot.
+  **The body cap was dead config, and that is the finding.** A 25 MB POST *was* 413'd — by
+  **Flask**, not by the proxy: the response carried `Vary: Cookie` and `web` logged the
+  request, so it crossed the proxy exactly as the Caddyfile's own comment said it could not.
+  `request_body max_size` only errors when the upstream **reads** past the limit, and Flask
+  never does — over `MAX_CONTENT_LENGTH` it refuses on the Content-Length alone without
+  touching the body. A Content-Length matcher now rejects at the edge: **413 with
+  `uploaded=0` and zero requests reaching `web`**, exact at the boundary (20971520 passes,
+  +1 rejects). It has to be **one CEL expression**, not a `header` matcher sitting next to an
+  `expression` one — matchers in a set are evaluated independently, so the header guard does
+  **not** stop the `int()`, and `int("")` on every request without a Content-Length, i.e.
+  every GET, is **a 500 for the whole site**. That was measured before it shipped, not
+  reasoned about. `max_size` is kept and does earn its place: a chunked 25 MB form, which the
+  matcher cannot see, was 413'd by Caddy with `web` never logging it.
+  **The proxy-header check was made to fail first.** 30 CSRF-valid POSTs from the host =
+  20 × 200 then 10 × 429 (the limit is 10/min but gunicorn runs two workers over an
+  in-memory store, so 20 is correct), while a container on another IP got 200 200 200. With
+  `TRUSTED_PROXY_HOPS=0` the same run logs `172.28.0.5` — the `caddy` container — as the
+  client for **every** request, and the second client is locked out 429 429 429 by traffic it
+  never sent. So the check can fail, which is what makes it worth passing.
+  Cost two false starts worth writing down: CSRF must be satisfied first or the limiter never
+  counts (a token-less POST is a 303 from the CSRF handler and 30 of them produced not one
+  429), and the `-Server` header does **not** cover the 308 — the automatic redirect is a
+  separate server that never sees the site block — while `Via: 1.1 Caddy` names the proxy on
+  every response anyway, so stripping `Server` is cosmetic. Left as-is: writing an explicit
+  `http://` block to fix it would replace Caddy's automatic redirect and put the ACME
+  HTTP-01 challenge in the way of a hand-rolled one, which is a bad trade on the item
+  before the first certificate. Suite unchanged at 433 passed / 12 skipped, `ruff check`
+  clean.
+- [x] **3. Correct `PROJECT.md`, which today's work made wrong.** It says six source adapters
   (seven), 318 tests (433), and carries **"No FX conversion for salary"** as a key decision —
   reversed outright this morning. A stale count is untidy; a reversed decision left standing
   as a decision is the kind of staleness that misleads, and `PROJECT.md` is the file that
   exists to say *why*. Its "Known rough edges" also still describes a Phase 5 that this phase
   is about to close. **Verify:** every claim in "Current state" re-read against the tree, not
   against the roadmap.
+  → Re-read against the tree, and it was wrong in more places than the item named. Counted
+  from the code: **seven** adapters (the registry, not the folder — `base.py` is not one),
+  **433 passed / 12 skipped** from an actual run, and **6842** jobs in `data/jobmatch.db`,
+  not 2375. **"No FX conversion for salary" is now the opposite decision**, written out with
+  the reason it was reversed rather than deleted, because a decision that changed is worth
+  more than one that was quietly dropped. Two the item had not spotted: the remote bullet
+  still said remote is matched on **`jobs.country`**, a single column that the "five places"
+  work replaced with the packed `jobs.countries` — the exact bug that stored "LATAM, Europe,
+  USA, Canada, APAC" as `US` — so it now has a bullet of its own; and **"Built" claimed
+  Phase 7 plus three of Phase 8**, when Phase 8 closed on 2026-08-29 and two Phase 9 items
+  have landed since. The rough edges were re-scored, not just re-worded: `caddy` and TLS come
+  **out** of "never run" (item 2 verified them locally against the shipped file; the real ACME
+  challenge, `deploy.yml` and the public URL stay), `IDEA.md` is no longer empty but is one
+  line under its placeholder, and the rate-limit note stops being hypothetical — the image
+  ships `--workers 2`, so the per-process store is a **live** defect, measured at 20 requests
+  through a 10/min limit. Docs only; suite re-run unchanged at 433/12.
 - [ ] **4. [Oliver] Buy the box and the domain.** Hetzner CX22 in an EU datacenter, and a
   domain with an A record (and AAAA if the box gets a v6). `DEPLOY.md §1–2` has it step by
   step: SSH keys only, `ufw`, unattended-upgrades, `fail2ban`, a `deploy` user, Docker.
