@@ -89,20 +89,79 @@ jobs:
 
   # The image is the deployment, so a Dockerfile that no longer builds is a
   # broken deploy — caught here rather than on the box.
+  #
+  # Both architectures, because the box Phase 9 item 4 picked is free and free
+  # means ARM: an Oracle Ampere A1 is `aarch64`, `deploy.yml` builds the image
+  # *on* the box, and so the first arm64 build of this Dockerfile would
+  # otherwise happen during the first deploy. A matrix rather than one build
+  # step with `platforms: linux/amd64,linux/arm64`: a two-platform build emits
+  # a manifest list, which `load: true` cannot put in the runner's docker image
+  # store, and losing `load` would lose the smoke test below — the part that
+  # proves the image *runs* and not merely that it built. One job per platform
+  # keeps both, and keeps a red job naming the architecture that broke.
   image:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
     steps:
       - uses: actions/checkout@v4
+
+      # arm64 is built and run under emulation on an amd64 runner. It is slow
+      # (the Playwright base alone is ~830 MB compressed) but it needs no box,
+      # which is the whole point of doing it here.
+      - name: Set up QEMU
+        if: matrix.platform != 'linux/amd64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: ${{ matrix.platform }}
           push: false
           load: true
           tags: jobmatch:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scoped per platform: one shared scope has the two jobs overwriting
+          # each other's cache with layers the other cannot use.
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
       - name: The image can import the app and reach the worker entrypoint
         run: |
-          docker run --rm -e SCAN_ENABLED=false jobmatch:ci \
+          docker run --rm --platform ${{ matrix.platform }} \
+            -e SCAN_ENABLED=false jobmatch:ci \
             python3 -c "import app, jobmatch.worker; print('ok', app.app.name)"
+
+      # The base image ships browsers per architecture and the pip package has
+      # to be the one that knows where they are, so "Chromium is present, and is
+      # a binary for *this* arch" is exactly what an arm64 build can get wrong
+      # while still building clean. The architecture is read out of the ELF
+      # header rather than from `file`, which the base image does not install.
+      #
+      # `-i` is load-bearing, not decoration: without it `docker run` gives the
+      # container /dev/null for stdin, `python3 -` reads an empty program, and
+      # the step exits 0 having run nothing at all. Measured, not assumed — a
+      # script whose only statement was `sys.exit("THIS SHOULD FAIL")` exited 0
+      # and printed nothing. Drop the `-i` and this check silently stops being
+      # one, which is the same "a check that cannot fail is not a check" trap
+      # item 6 names for the deploy smoke test.
+      - name: Chromium is present, and is built for this architecture
+        run: |
+          docker run --rm -i --platform ${{ matrix.platform }} jobmatch:ci python3 - <<'PY'
+          import struct, sys
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              path = p.chromium.executable_path
+          with open(path, "rb") as fh:
+              head = fh.read(20)
+          assert head[:4] == b"\x7fELF", head[:4]
+          machine = struct.unpack_from("<H", head, 18)[0]
+          want = {"linux/amd64": 0x3E, "linux/arm64": 0xB7}["${{ matrix.platform }}"]
+          print(path, hex(machine))
+          if machine != want:
+              sys.exit(f"expected e_machine {hex(want)}, got {hex(machine)}")
+          PY

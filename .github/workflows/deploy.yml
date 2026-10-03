@@ -54,11 +54,18 @@ jobs:
           #
           # `--wait` makes the step fail if a container does not come up
           # healthy, so a broken deploy is a red workflow and not a silent 502.
+          # It only does that for a service that *has* a healthcheck: compose
+          # calls one without a healthcheck "Healthy" even while it crash-loops
+          # (measured), which is why all four services in docker-compose.yml
+          # declare one.
+          #
+          # RELEASE is the sha this run checked out. /healthz reads it back in
+          # the next step, and every Sentry event carries it.
           ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -euo pipefail <<EOF
             cd "$DEPLOY_PATH"
             git fetch --prune origin
             git checkout --detach "$SHA"
-            docker compose up -d --build --wait --remove-orphans
+            RELEASE="$SHA" docker compose up -d --build --wait --remove-orphans
             docker image prune -f --filter 'until=168h'
             docker compose ps
           EOF
@@ -66,9 +73,37 @@ jobs:
       - name: Smoke-test the public URL
         env:
           DOMAIN: ${{ secrets.DEPLOY_DOMAIN }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
-          # The login page is the one route that answers without a session, so
-          # a 200 here means TLS, Caddy, gunicorn and the database are all up.
+          # /healthz is public, runs a real query, and reports the RELEASE the
+          # previous step passed in — so reading it back and matching it against
+          # $SHA is what makes this a check that *this commit* is live rather
+          # than that *something* answers on this name. Measured against a
+          # parked page on the same hostname: 200, and the old check went green.
+          # A free subdomain whose A record is set by hand is exactly where that
+          # happens.
+          curl --silent --show-error --fail --max-time 30 \
+               --output healthz.json "https://$DOMAIN/healthz"
+          cat healthz.json; echo
+          python3 - "$SHA" <<'PY'
+          import json, pathlib, sys
+          raw = pathlib.Path("healthz.json").read_text()
+          try:
+              got = json.loads(raw)
+          except ValueError:
+              sys.exit(f"/healthz did not answer JSON — does the name still point\n"
+                       f"at this box? It said:\n{raw[:200]}")
+          if got.get("status") != "ok" or got.get("checks", {}).get("database") != "ok":
+              sys.exit(f"/healthz is not ok: {got}")
+          if got.get("release") != sys.argv[1]:
+              sys.exit(
+                  f"/healthz reports release {got.get('release')!r}, expected "
+                  f"{sys.argv[1]!r} — the box is not serving this commit"
+              )
+          print("release matches the deployed commit")
+          PY
+          # And the login page, the one route that renders without a session: a
+          # 200 here means Caddy, gunicorn and the templates are all working.
           code=$(curl --silent --show-error --location --max-time 30 \
                       --output /dev/null --write-out '%{http_code}' \
                       "https://$DOMAIN/login")

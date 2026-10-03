@@ -9,12 +9,14 @@ Run from the repo root:  python3 -m unittest discover -s tests -t .
 """
 
 import unittest
+from datetime import date, timedelta
 
 # `app` is imported *through* test_auth, never before it: that module turns the
 # rate limiter off before importing the app, and the app reads config once, at
 # import time. Importing `app` here directly would leave login rate-limited and
 # every client_for() in this file would get a 429 instead of a session.
-from jobmatch import places, salary
+from jobmatch import places, salary, scoring
+from jobmatch.sources import base
 from tests.test_auth import PASSWORD, AuthTestCase, webapp
 
 
@@ -229,6 +231,133 @@ class JobFacetTests(AuthTestCase):
         self.assertEqual(settings["pay_floors"][0]["label"], "€10+ an hour")
 
 
+class PostedAgeTests(AuthTestCase):
+    """The Posted filter, and the reason it can be trusted.
+
+    The pool is cumulative — nothing ages out of `jobs` — so "what went up this
+    week?" is a question about a column, and the column is `jobs.posted_at`: an
+    absolute date, written once at scan time and never rewritten. Every age the
+    app prints or filters on is derived from it against *today*, which is what
+    makes the same row read "4 days ago" on one day and "8 days ago" four days
+    later instead of staying frozen at whatever the board said when we looked.
+    """
+
+    def setUp(self):
+        super().setUp()
+        today = date.today()
+
+        def aged(days, **cols):
+            return self.add_job(
+                f"{days} days old", source_id=f"aged-{days}",
+                posted_at=(today - timedelta(days=days)).isoformat(), **cols,
+            )
+
+        self.today = aged(0)
+        self.two = aged(2)
+        self.week = aged(7)
+        self.old = aged(40)
+        # The crawl's own edge: `scan_days = 7` fetches back to exactly here.
+        self.edge = self.add_job("On the crawl's edge", source_id="edge",
+                                 posted_at=base.posted_cutoff(7))
+        self.past_edge = aged(8)
+        # Found this morning, posted in 2023 — the row that makes it matter
+        # which of the two columns a freshness window reads.
+        self.stale = self.add_job("Found today, posted in 2023",
+                                  source_id="stale", posted_at="2023-04-01")
+        # A board that dated nothing we could parse. 257 of the 7 970 rows in
+        # the live pool look like this, and none of them can answer "is this
+        # newer than a week?" — so they are out of every window rather than
+        # assumed fresh.
+        self.undated = self.add_job("Undated", source_id="undated")
+        # Every row above exists before the account does, because `user_jobs`
+        # is materialized at signup — a job inserted afterwards is not in this
+        # caller's list at all, and an assertNotIn would pass for the wrong
+        # reason.
+        self.make_user("a@example.com")
+        self.client = self.client_for("a@example.com")
+
+    def ids(self, query=""):
+        page = self.client.get(f"/api/jobs?status=new&{query}").get_json()
+        self.assertEqual(page["total"], len(page["jobs"]))
+        return {job["id"] for job in page["jobs"]}
+
+    def test_a_window_keeps_what_is_newer_than_it(self):
+        self.assertEqual(self.ids("posted=1"), {self.today})
+        self.assertEqual(self.ids("posted=3"), {self.today, self.two})
+        self.assertEqual(self.ids("posted=14"),
+                         {self.today, self.two, self.week, self.edge,
+                          self.past_edge})
+
+    def test_the_boundary_is_the_age_the_label_names(self):
+        """"7 days or newer" includes a posting that is exactly 7 days old."""
+        self.assertIn(self.week, self.ids("posted=7"))
+        self.assertNotIn(self.week, self.ids("posted=3"))
+
+    def test_the_window_is_the_crawls_own_arithmetic(self):
+        """One derivation, so Settings' "last 7 days" and this agree.
+
+        `scan_days = 7` lets the crawl fetch a posting up to `posted_cutoff(7)`
+        old; "7 days or newer" here must select exactly that far back and no
+        other distance, or the same word means two things one day apart.
+        """
+        window = self.ids("posted=7")
+        self.assertIn(self.edge, window)
+        self.assertNotIn(self.past_edge, window)
+
+    def test_a_posting_the_board_never_dated_is_in_no_window(self):
+        for days in webapp.POSTED_WINDOWS:
+            self.assertNotIn(self.undated, self.ids(f"posted={days}"), days)
+        # It is still in the list when nothing is asked about its age.
+        self.assertIn(self.undated, self.ids())
+
+    def test_the_filter_asks_posted_at_and_not_when_we_saw_it(self):
+        """The sorts coalesce to `scraped_at`; a freshness filter must not.
+
+        `scraped_at` defaults to now for every row this suite inserts, so a
+        window built on it would call a three-year-old ad found this morning
+        fresh — which is the one answer this filter exists to avoid.
+        """
+        self.assertNotIn(self.stale, self.ids("posted=30"))
+        # …and the row really is one this scan just saw, so a window over
+        # `scraped_at` would have kept it.
+        self.assertEqual(self.conn.scalar(
+            "SELECT scraped_at FROM jobs WHERE id = :id",
+            {"id": self.stale})[:10], date.today().isoformat())
+        # It is not hidden outright — only untrusted as evidence of freshness.
+        self.assertIn(self.stale, self.ids())
+
+    def test_a_window_the_server_does_not_offer_is_ignored_not_obeyed(self):
+        """Like every other filter here: a hand-edited query cannot empty it."""
+        everything = self.ids()
+        for junk in ("posted=2", "posted=0", "posted=-7", "posted=nonsense",
+                     "posted=9999"):
+            self.assertEqual(self.ids(junk), everything, junk)
+
+    def test_the_age_on_a_card_is_derived_rather_than_stored(self):
+        """Two things a card prints, both computed from the one stored date."""
+        jobs = {job["id"]: job for job in
+                self.client.get("/api/jobs?status=new").get_json()["jobs"]}
+        self.assertEqual(jobs[self.today]["posted_days_ago"], 0)
+        self.assertEqual(jobs[self.today]["posted_display"], "today")
+        self.assertEqual(jobs[self.two]["posted_days_ago"], 2)
+        self.assertEqual(jobs[self.two]["posted_display"], "2 days ago")
+        # Eight days used to read "last week", which threw away the digit the
+        # whole question is about. Past a month it goes back to a date.
+        self.assertEqual(jobs[self.week]["posted_display"], "7 days ago")
+        self.assertEqual(jobs[self.old]["posted_days_ago"], 40)
+        self.assertNotIn("ago", jobs[self.old]["posted_display"])
+        # A row with no date says nothing rather than saying "today".
+        self.assertIsNone(jobs[self.undated]["posted_days_ago"])
+        self.assertEqual(jobs[self.undated]["posted_display"], "")
+
+    def test_the_dropdown_is_the_servers_words_like_every_other_filter(self):
+        settings = self.client.get("/api/settings").get_json()
+        self.assertEqual([w["value"] for w in settings["posted_windows"]],
+                         list(webapp.POSTED_WINDOWS))
+        self.assertEqual(settings["posted_windows"][0]["label"], "1 day or newer")
+        self.assertEqual(settings["posted_windows"][2]["label"], "7 days or newer")
+
+
 class CrossCurrencyPayTests(AuthTestCase):
     """Pay across two currencies — the half "per hour" never fixed.
 
@@ -428,13 +557,36 @@ class ReachableFilterTests(AuthTestCase):
             return self.client.get(f"/api/jobs/{job_id}").get_json()["job"]["match_score"]
 
         self.settings(user_regions=["US"], user_skills=[], weight_skill=0,
-                      weight_worktype=0, weight_location=1, weight_seniority=0)
+                      weight_role=0, weight_worktype=0, weight_location=1,
+                      weight_seniority=0)
         self.assertEqual(score(self.us), 100.0)
         self.assertEqual(score(self.de), 0.0)
         res = self.client.put("/api/settings", json={"user_regions": ["EU"]})
         self.assertTrue(res.get_json()["rescored"])
         self.assertEqual(score(self.de), 100.0)
         self.assertEqual(score(self.us), 0.0)
+
+    def test_search_terms_rescore_too_because_the_title_is_now_scored(self):
+        """`search_terms` tells the crawl what to fetch, and since the role
+        component it also tells the scorer which disciplines this person is
+        looking for. That makes it two settings in one field, and only one of
+        them used to need a rescore — so it has to be in RESCORE_KEYS as well
+        as in `db.SCAN_SETTING_KEYS`, or saving Settings would change what
+        "frontend" means and leave every score on the Jobs page stale."""
+        def score(job_id):
+            return self.client.get(f"/api/jobs/{job_id}").get_json()["job"]["match_score"]
+
+        job = self.add_job("Frontend Developer", country="SK")
+        self.settings(user_skills=[], search_terms=["accounting"],
+                      weight_skill=0, weight_role=1, weight_worktype=0,
+                      weight_location=0, weight_seniority=0)
+        # "frontend" is a discipline the app knows, but not one they asked for,
+        # so the title only reaches the bare-engineering-word rung.
+        self.assertEqual(score(job), 100 * scoring.ROLE_GENERIC_HIT)
+
+        res = self.client.put("/api/settings", json={"search_terms": ["frontend"]})
+        self.assertTrue(res.get_json()["rescored"], "the field moved a score")
+        self.assertEqual(score(job), 100 * scoring.ROLE_DISCIPLINE)
 
 
 class TrackerGroupTests(AuthTestCase):

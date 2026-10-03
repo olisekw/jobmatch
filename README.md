@@ -12,7 +12,7 @@ Scans Slovak and international job boards on a schedule, scores every posting
 <picture>
   <source srcset="static/screens/jobs-dark.png" media="(prefers-color-scheme: dark)">
   <img src="static/screens/jobs.png" alt="The Jobs page: postings with a 0–100
-       match score, the four component bars behind it, and filters above.">
+       match score, the component bars behind it, and filters above.">
 </picture>
 
 > **Live demo** — not yet. The box is the one thing left in
@@ -37,7 +37,7 @@ Scans Slovak and international job boards on a schedule, scores every posting
   | [Jobicy](https://jobicy.com) | worldwide remote | public JSON API |
   | [Arbeitnow](https://www.arbeitnow.com) | EU, remote-flagged only | public JSON API |
 
-- **Scores every job 0–100** from weighted components: skills coverage,
+- **Scores every job 0–100** from weighted components: role, skills coverage,
   worktype, location, seniority. Weights and the match threshold are sliders in
   Settings; changing them re-scores instantly — no re-scraping.
 - **Remote is not automatically a fit.** A remote job is still hired out of
@@ -98,7 +98,7 @@ Scans Slovak and international job boards on a schedule, scores every posting
 <td width="50%">
 <picture>
   <source srcset="static/screens/settings-dark.png" media="(prefers-color-scheme: dark)">
-  <img src="static/screens/settings.png" alt="Settings: the four weight
+  <img src="static/screens/settings.png" alt="Settings: the five weight
        sliders, the match threshold and the CV upload.">
 </picture>
 </td>
@@ -141,8 +141,10 @@ Why it is shaped like that:
 - **The scanner is its own process.** Scans live in a database-backed queue
   (`scans` doubles as it), claimed with a conditional `UPDATE`, with progress,
   phase and the cancel flag stored as columns — so a status poll can be
-  answered by a process that is not the one scanning, and the web tier can be
-  several gunicorn workers while exactly one container scrapes.
+  answered by a process that is not the one scanning, and the web tier could be
+  several gunicorn workers while exactly one container scrapes. It ships as
+  *one* process with `--threads 8` all the same — the in-memory rate limiter is
+  per-process, and two workers made `/login`'s 10/min let 20 through.
 - **Scheduling is a query, not a timer.** "Is the newest scan older than the
   interval?" survives a restart, cannot drift and cannot double-fire. Same for
   the nightly demo reset and for each user's digest. No APScheduler, no Celery,
@@ -188,7 +190,7 @@ which documents every variable, and [`DEPLOY.md`](DEPLOY.md) for the box.
 ### Other commands
 
 ```bash
-python3 -m pytest tests/           # 264 tests (12 skip without a Postgres server)
+python3 -m pytest tests/           # 513 tests (12 skip without a Postgres server)
 python3 -m jobmatch.backfill       # idempotent schema backfill + one-time migrations
 python3 -m jobmatch.reextract      # replay extraction over stored rows after a pattern fix
 python3 -m jobmatch.demo           # create or re-seed the public demo account
@@ -219,7 +221,7 @@ failure that matters — the web container up while Postgres is not.
 |---|---|
 | **Landing** (`/`, logged out) | What it does, the scoring formula, screenshots, and one button into the demo |
 | **Dashboard** | Stat cards, last-scan summary, scan button, top matches |
-| **Jobs** | Every offer with a score you can open into its four components, filters (status / min-score slider / text / **work mode** / **country** / **pay** / source / sort incl. best pay), Apply · Decline · Restore, "Load more" paging, and keyboard triage (`j`/`k`, `a`/`d`, `s`, `/`) |
+| **Jobs** | Every offer with a score you can open into its components, filters (status / min-score slider / text / **work mode** / **country** / **posted age** / **pay** / source / sort incl. best pay), Apply · Decline · Restore, "Load more" paging, and keyboard triage (`j`/`k`, `a`/`d`, `s`, `/`) |
 | **Job** | One posting in full: the scraped description, the score broken down, the skills found in it, and a link out to the board |
 | **Tracker** | Clickable counts that filter the table (everything / waiting to hear / interviews / offers / rejected / withdrawn, deep-linked as `#offer`), status dropdown, notes, event history |
 | **Settings** | CV upload, profile (location / where you can work / seniority / worktype / skills), score weights, match threshold, search terms & presets, board toggles, scan window, and the email digest on/off |
@@ -238,6 +240,23 @@ status `new`) — nothing is thrown away when you change settings.
 The interface says the same thing: an unknown component is a **hatched** bar,
 never an empty one, because an empty bar reads as a zero and a zero is exactly
 what the formula refuses to assume.
+
+The **role** component reads the job title, and is the only one known for every
+scored job — every posting has a title. It exists because the other four could
+not tell a React role from a "junior ESG consultant": a description mentioning
+Python once gave skills a perfect score, and the field that says what the job
+actually *is* was the one nothing read. It is graded by how specific the match
+is — a technology you have in the title beats the discipline you searched for,
+which beats a bare "engineer" that half the market shares — and level words
+("junior", "graduate", "intern") are stripped out first, because those belong to
+the seniority component and counting them twice is what floated the consultancy
+ads to the top. A title naming none of your work scores a real zero, not
+"unknown": that is an answer, not missing data.
+
+**Skills coverage** is `overlap / max(detected skills, 3)`. The floor is the
+point: extraction finds a single skill in a large share of ads, and covering a
+one-item list is not the same fit as covering a full stack, though plain
+coverage scored both 1.0.
 
 The **location** component is the one with two rules behind it, because "remote"
 changes what the word location means. On-site and hybrid are a commute, matched
@@ -322,7 +341,7 @@ tests/                  scoring, extraction, auth + tenant isolation, the scan
                         queue, the jobs API, the demo, the digest, /healthz,
                         the whole loop end to end, Postgres parity
 tools/screenshots.py    regenerates the screenshots from a copy of the live DB
-deploy/                 Caddyfile, backup.sh, restore-check.sh
+deploy/                 Caddyfile, backup.sh, backup-pull.sh, restore-check.sh
 ```
 
 ## Notes

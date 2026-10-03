@@ -64,6 +64,11 @@
 
   {# The scheduled crawl belongs to the instance, not to this tab. #}
   <script>window.CAN_SCAN = {{ 'true' if can_scan else 'false' }};</script>
+  {# The five score components and their words, from `display.SCORE_COMPONENTS`.
+     Here rather than on `/api/settings` because the job detail page draws the
+     breakdown without ever asking for settings — putting the list behind that
+     route would cost it a second request for five strings. #}
+  <script>window.SCORE_COMPONENTS = {{ score_components | tojson }};</script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>

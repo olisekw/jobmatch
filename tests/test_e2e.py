@@ -225,7 +225,13 @@ class WholeLoopTests(EndToEndTestCase):
         self.assertEqual(top["match_score"], 100.0)
         self.assertEqual(top["worktype"], "remote", "extraction ran on the fetched text")
         self.assertIn("python", top["skills"])
-        self.assertEqual(bottom["match_score"], 0.0)
+        # The Java ad is not this person's job and must not count as a match.
+        # It is no longer a flat zero: its title does say "developer", which
+        # the role component scores on its lowest rung — the exact arithmetic
+        # is pinned in test_scoring.py, what matters here is that it stays well
+        # under the threshold while the Python ad is a perfect fit.
+        self.assertLess(bottom["match_score"], db.DEFAULT_SETTINGS["min_match_score"])
+        self.assertLess(bottom["match_score"], top["match_score"])
         # The scan placed the job as it stored it: "Bratislava" is a town on a
         # board, and `jobs.country` is what the Jobs page filters on.
         self.assertEqual(top["country"], "SK")
@@ -319,7 +325,13 @@ class WholeLoopTests(EndToEndTestCase):
         self.assertEqual(theirs["total"], len(OFFERS), "the pool is shared")
         self.assertEqual(theirs["jobs"][0]["title"], OFFERS["miss"]["title"],
                          "the same two jobs, ranked for a different person")
-        self.assertEqual(theirs["jobs"][0]["match_score"], 100.0)
+        # A strong match for them — the ad names their language in its title,
+        # their level and their town. Not a perfect 100: the ad lists two
+        # skills, and covering a two-item list is thinner evidence than
+        # covering a full stack (see `SkillsEvidenceTests`).
+        self.assertGreater(theirs["jobs"][0]["match_score"],
+                           theirs["jobs"][-1]["match_score"])
+        self.assertGreaterEqual(theirs["jobs"][0]["match_score"], 80.0)
 
         # And the admin's own ranking did not move a point.
         self.assertEqual(

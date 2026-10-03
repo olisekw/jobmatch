@@ -15,8 +15,9 @@ Run from the repo root:  python3 -m unittest discover -s tests -t .
 """
 
 import unittest
+from datetime import date
 
-from jobmatch import dates
+from jobmatch import dates, display
 
 TODAY = "2026-08-28"
 
@@ -71,6 +72,61 @@ class ExpiryTests(unittest.TestCase):
     def test_nothing_at_all_is_none_rather_than_today(self):
         for text in (None, "", "   ", "Odpověď do 2 týdnů", 17):
             self.assertIsNone(dates.parse_posted(text, TODAY), repr(text))
+
+
+class AgeIsDerivedNotFrozenTests(unittest.TestCase):
+    """A posting gets older while it sits in the pool, and must read that way.
+
+    `jobs.posted_at` is the absolute date a board's freshness string resolved
+    to, written once by the scan that found the row. Nothing downstream stores
+    an age: `days_ago` and `display.relative_date` both subtract from *today*,
+    which is the only arrangement in which one stored row answers the question
+    correctly on every later day. Storing the age instead — "4 days ago",
+    straight off the board — would have pinned the row to the scan that found
+    it, and the whole pool would read as though it were scraped this morning.
+    """
+
+    SCRAPED = "2026-10-03"     # the day the scan ran
+    LATER = date(2026, 10, 7)  # four days on, reading the same row
+
+    def stored(self, freshness):
+        """What the scan of 3 Oct would have written into `jobs.posted_at`."""
+        return dates.parse_posted(freshness, self.SCRAPED)
+
+    def test_the_boards_words_resolve_against_the_day_of_the_scan(self):
+        self.assertEqual(self.stored("pred 4 dňami"), "2026-09-29")
+        self.assertEqual(self.stored("dnes"), self.SCRAPED)
+
+    def test_four_days_old_on_the_scan_is_eight_days_old_four_days_later(self):
+        posted = self.stored("pred 4 dňami")
+        self.assertEqual(dates.days_ago(posted, date.fromisoformat(self.SCRAPED)), 4)
+        self.assertEqual(dates.days_ago(posted, self.LATER), 8)
+
+    def test_the_words_on_the_card_move_with_it(self):
+        """The same row, read on two days, through the payload's own helper."""
+        posted = self.stored("pred 4 dňami")
+        self.assertEqual(
+            display.relative_date(posted, today=date.fromisoformat(self.SCRAPED)),
+            "4 days ago")
+        self.assertEqual(display.relative_date(posted, today=self.LATER),
+                         "8 days ago")
+
+    def test_todays_posting_is_not_still_today_a_week_later(self):
+        posted = self.stored("dnes")
+        self.assertEqual(display.relative_date(
+            posted, today=date.fromisoformat(self.SCRAPED)), "today")
+        self.assertEqual(display.relative_date(posted, today=self.LATER),
+                         "4 days ago")
+
+    def test_an_unparseable_freshness_stores_nothing_rather_than_today(self):
+        """A date we could not read must not become a posting dated now.
+
+        `parse_posted` returning None is what keeps the row out of every
+        freshness window, instead of it claiming the day of the scan.
+        """
+        self.assertIsNone(self.stored("Nástup dohodou"))
+        self.assertIsNone(dates.days_ago(None))
+        self.assertEqual(display.relative_date(None), "")
 
 
 if __name__ == "__main__":

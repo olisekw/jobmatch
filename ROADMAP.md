@@ -14,6 +14,19 @@ Realistic effort: ~6–8 focused sessions. Phase 5 is the **ship line** — a pu
 from that point on; everything after is improvement, not a blocker. **Phase 9 is what
 crosses it**: Phase 5 built and verified everything that can be verified without a VPS, so
 what remains is an account, a domain, and the checks only a real host can answer.
+**Phase 10 is not a substitute for it** — it is what is worth doing while the box is pending,
+planned 2026-09-25 once Phase 9 had no agent-doable half left; Phase 9 resumes ahead of it the
+day the box exists.
+
+**Direction changed again on 2026-10-03, and this one outranks the paragraph above.** The
+owner is job-hunting *now*, so the project's definition of done is no longer "deployed
+multi-user SaaS" but the sentence in `MISSION.md`: *the end result is me getting a job that I
+am happy with.* Read `MISSION.md` first — it is the brief in his own words, with the decisions
+taken under it. In practice that means: Slovakia and Profesia only, Košice or remote, nothing
+above junior, no email and no box this week, and a Jobs page stripped to a list that links out
+to the board. Phases 9 and 10 are not cancelled; they are simply behind the only question that
+matters, and the multi-user machinery stays working rather than being torn out — nothing new
+gets built for a hypothetical user while this is true.
 
 ## Two constraints that shape everything below
 
@@ -71,6 +84,15 @@ what remains is an account, a domain, and the checks only a real host can answer
 - Two salaries compared on one period **and** one currency: `salary.hourly_eur()` over an
   approximate, dated euro table that nothing stored reads, ending a "Best pay" list whose
   entire top five was Czech (Phase 8). 433 tests.
+- A Jobs list that can be asked how old a posting is, and a scan that finishes so there is
+  something fresh in it (2026-09-28, asked for directly rather than planned). 538 tests.
+- The local instance made fit to actually live on (2026-10-01, asked for directly rather than
+  planned): the shared crawl had been running since August on `local@jobmatch.local` — a
+  passwordless pre-Phase-3 row that `db.admin_user_id` preferred for being id 1 — so the owner's
+  boards and terms were read by no scan and could not be corrected from the UI; and the `.env`
+  feeding both processes was being read by neither, python-dotenv having been absent from the
+  interpreter while `config.py` swallowed the ImportError. Both are now migrations and refusals
+  rather than facts somebody has to notice. 556 tests.
 
 ---
 
@@ -698,7 +720,7 @@ and 8 are not in the repository at all.
   range and an hourly unit. Our parse is faithful to the ad, which is the invariant, and no
   currency rule can fix an ad that lies about its own period.
 
-## Phase 9 — 🚢 Cross the ship line (planned 2026-08-29; items 1–3 done, 4–10 open)
+## Phase 9 — 🚢 Cross the ship line (planned 2026-08-29; items 1–3 done, 4–10 open; item 4 re-planned onto a free ARM box 2026-09-12, its box-free half — CI on `linux/arm64` — landed the same day, and on 2026-09-13 the arm64 build and a running aarch64 Chromium were proven locally, which also found that CI's Chromium check could never fail; item 6's box-free half — "can this deploy check fail?", answered no — landed 2026-09-17, as did item 5's, which found a first boot crawling the boards on the demo account's settings before the admin existed; item 7 was re-planned onto a free target the same day — an object store, because Oracle reclaims idle *compute*, which is what a backup VM is — landing its box-free half; item 8's box-free half — are the `seen` counts right about the boards' *live* markup? — landed 2026-09-22, finding all seven exact and Kariéra's alarm unable to fire; item 9's box-free half — a real SMTP conversation, which nothing in the suite had ever had — landed 2026-09-23, finding every message leaving without a `Date` or a `Message-ID`, 8-bit bodies under an envelope that never declared them, and credentials handed to an unencrypted socket; item 8's own parked follow-up — the Remotive stub, which it said wanted confirming a second time before code was written around it — was confirmed and fixed 2026-09-23, taking that board from 19 requests a scan to 1. **Items 4–10 are otherwise blocked on Oliver provisioning the box and the subdomain — no agent can do that half, and as of 2026-09-25 every half that did not need one has landed: there is no agent-doable box left in this phase. `## Phase 10` was planned that day for what is still worth doing while the box is pending, and it waits the moment the box exists.**)
 
 Phase 8 asked that the next phase be planned **after** deployment, "against a deployed thing
 rather than an imagined one". This phase does not break that rule: it is *the deployment*, not
@@ -725,7 +747,13 @@ Two things found while planning it, both of which change what this phase has to 
 
 Items 1 and 3 need no box and should go first; 2 needs no box either and is worth doing
 *before* one exists, because Let's Encrypt rate-limits failure. Everything from 4 down is
-gated on an account and a domain, which is Oliver's to buy and nobody else's.
+gated on an account and a domain.
+
+**Item 4 was re-planned on 2026-09-12 onto a free path, because the thing gating this phase
+was a purchase and Oliver asked for a free option outright.** It had stalled four sessions
+running on "[Oliver] Buy the box and the domain". A no-cost box is an ARM box, and that is
+not a free swap — it changes the CPU architecture every container runs on, so the re-plan
+comes with the architecture question answered rather than deferred to the box. See item 4.
 
 - [x] **1. Get Phase 7 and Phase 8 into `main`.** Review the 62 changed files, commit them on
   a branch, and merge — the ordinary flow, but it is the first item in this phase because
@@ -817,32 +845,311 @@ gated on an account and a domain, which is Oliver's to buy and nobody else's.
   line under its placeholder, and the rate-limit note stops being hypothetical — the image
   ships `--workers 2`, so the per-process store is a **live** defect, measured at 20 requests
   through a 10/min limit. Docs only; suite re-run unchanged at 433/12.
-- [ ] **4. [Oliver] Buy the box and the domain.** Hetzner CX22 in an EU datacenter, and a
-  domain with an A record (and AAAA if the box gets a v6). `DEPLOY.md §1–2` has it step by
-  step: SSH keys only, `ufw`, unattended-upgrades, `fail2ban`, a `deploy` user, Docker.
-  **Verify:** `ssh deploy@host docker compose version` answers, the domain resolves to the
-  box from off the network, and password SSH is refused.
+- [ ] **4. A box and a domain, both free — which means an ARM box.** Re-planned 2026-09-12;
+  the original text was "[Oliver] Buy the box and the domain: Hetzner CX22", ~€4/mo, and it
+  stalled this phase for four sessions. The free equivalents are an **Oracle Cloud Always Free
+  Ampere A1** instance in an EU region (Frankfurt or Amsterdam, so CVs stay in the EU as
+  `DEPLOY.md` intends) and a **free subdomain**, and each brings a constraint the paid version
+  did not:
+
+  - **Always Free A1 is 2 OCPU / 12 GB, not the 4 / 24 everyone quotes** — Oracle halved it on
+    2026-06-15 and their own docs now read "1,500 OCPU hours per month … equates to 2 OCPUs
+    and 12 GB of memory", plus 200 GB of block storage. That is still *more* box than the
+    CX22 this was sized for (2 vCPU / 4 GB), so the sizing is not the problem.
+  - **The reclamation rule is, and it is the one thing to plan around.** Oracle reclaims an
+    Always Free instance when, over a rolling 7-day window, 95th-percentile CPU **and**
+    network **and** memory are all under 20 %. JobMatch idles below every one of those:
+    Postgres, two gunicorn workers, the scan worker and Caddy sitting still come nowhere near
+    2.4 GB of a 12 GB box, and at `SCAN_INTERVAL_HOURS = 6` a crawl of even ten minutes is a
+    ~3 % duty cycle, so p95 CPU stays flat. The standard exemption is upgrading the tenancy to Pay As You Go —
+    Oracle's docs say plainly that "Oracle doesn't charge for Always Free resources after you
+    upgrade" — but it puts a card on file, which is exactly what this re-plan is avoiding.
+    **Decide this before provisioning, not after the box disappears**; the alternative is to
+    size the instance so idle memory clears 20 % rather than to manufacture busywork.
+  - **A free domain is a subdomain**, and the two that need no eligibility are `duckdns.org`
+    and `eu.org`. Both are **on the Public Suffix List** (verified against the list itself —
+    lines 13015 and 13398), which is the part that actually matters: Let's Encrypt counts its
+    certificates-per-registered-domain limit per *your* subdomain rather than pooling every
+    DuckDNS user into one bucket, so a real certificate is reachable. `eu.org` is permanent
+    but wants your own nameservers and is approved by hand over weeks; `duckdns.org` is
+    instant and is the one to start on. GitHub Student Pack's Namecheap `.me` is free for one
+    year only and needs current enrolment, so it is a nice-to-have, not the plan.
+  - **`deploy.yml` builds the image on the box**, so the box builds for its own architecture
+    and no registry or cross-push is involved — but CI's `image` job builds amd64 only, which
+    means **nothing has ever built this Dockerfile on arm64** and the box would be the first
+    place it is tried. Teach the `image` job `platforms: linux/amd64,linux/arm64` *before*
+    provisioning: it is the one arm64 check that needs no box, and item 5 is a bad place to
+    discover a build failure.
+    → **Done 2026-09-12 — but not as this bullet wrote it, because that literal would have
+    cost the smoke test.** `load: true` is single-platform only ("only compatible with
+    single-platform builds", per the action's own IO reference), so `platforms:
+    linux/amd64,linux/arm64` on the one job emits a manifest list the runner's docker image
+    store cannot take: the build would go green and the `docker run` step that proves the
+    image *runs* — rather than merely builds — would stop working. `image` is now a **matrix
+    over `platform`**: one job per architecture, each keeping `load` and the run check,
+    `setup-qemu-action` on the arm64 leg only, and the `type=gha` cache `scope`d per platform
+    so the two legs stop overwriting each other with layers the other cannot use. A red job
+    now also names the architecture that broke. It gained one check the amd64-only job never
+    needed — Chromium's **`e_machine` read out of the ELF header inside the built image** and
+    asserted against the leg's platform (0x3e / 0xb7), because the base image ships browsers
+    per architecture and "builds clean but carries the other arch's browser" is exactly how
+    this fails quietly. That step was **made to fail before it was trusted**: driven against
+    synthetic ELF headers both ways it exits 0 on a match and non-zero on a mismatch, so it
+    is not a step that can only pass. **Still unverified: the arm64 build itself.** Docker
+    Desktop on this machine reports "already running" over a dead socket and has not started
+    its VM since 2026-09-07, so nothing here can build it, and CI cannot until the branch is
+    pushed — which is why this item's box stays unchecked and the rest of it is still
+    Oliver's to provision.
+
+  **The architecture risk was verified rather than deferred** (2026-09-12), because "free box"
+  silently means "ARM" and the image drives a real Chromium. All of it checked against the
+  registry and PyPI, since Docker Desktop would not start on this machine:
+  `mcr.microsoft.com/playwright/python:v1.62.0-noble` publishes a **linux/arm64** manifest;
+  that image's own build history runs `playwright install --with-deps` under
+  `uname -m = aarch64`; its browser layer contains
+  `ms-playwright/chromium-1234/` — **the exact revision Playwright 1.62.0 pins**, carrying
+  `INSTALLATION_COMPLETE` — and the `chrome` binary inside it, read out of the layer and
+  inspected byte-wise, is **ELF64 with `e_machine` 0xb7, AArch64**. Playwright also publishes
+  `chromium-linux-arm64.zip` for revision 1234 (204 MB) for the non-Docker path. Every
+  compiled dependency has a cp312 aarch64 manylinux wheel — `psycopg2-binary`, `lxml`,
+  `greenlet`, `cffi`, `SQLAlchemy`, and `argon2-cffi-bindings` through a `cp310-abi3` wheel,
+  which is the one that looks missing if you grep for `cp312` and stop there.
+  **What is still unproven:** that *our* Dockerfile builds on arm64 (nothing has ever tried),
+  and that Chromium launches inside the worker's 1500m limit on 2 OCPU — the second is item
+  8's job and always was.
+
+  → **Both of those are now proven, and the first sentence above was wrong when it was
+  written** (2026-09-13). "Nothing has ever tried" was checkable and was not checked:
+  `jobmatch:latest` has been sitting in this laptop's image store since **2026-09-05**,
+  `linux/arm64`, built during item 2's four-container stack run — seven days *before* the
+  claim — and `Dockerfile` and `requirements.txt` are both untouched since `6b62e1f`
+  (2026-08-19), so it was built from the byte-identical files that ship today. The
+  architecture question was answered by a build a week earlier and nobody looked.
+
+  Rather than rest on a six-day-old image, it was rebuilt from scratch: **`docker build
+  --no-cache --platform linux/arm64` on this machine, which is native `aarch64` and not
+  QEMU.** Exit 0, **zero `CACHED` layers** — the first attempt hit that same 09-05 cache and
+  reported success in nine seconds having compiled nothing, which is why the run that counts
+  is the `--no-cache` one. Every compiled dependency resolved a **prebuilt aarch64 manylinux
+  wheel with no sdist and no `Building wheel for` line anywhere in the log**, and the real
+  build covered five the 09-12 registry check never enumerated: `cryptography`
+  (`cp311-abi3`), `pillow`, `pypdfium2`, `wrapt` and `charset_normalizer`, alongside the
+  `psycopg2-binary` / `lxml` / `greenlet` / `cffi` / `SQLAlchemy` / `argon2-cffi-bindings`
+  that were predicted.
+
+  **Chromium was launched, not merely inspected.** CI reads an ELF header; that proves the
+  file is AArch64, not that it runs. Inside the image, under the worker's *own* compose
+  limits (`--memory=1500m --shm-size=512m`) and with `scan.py`'s exact
+  `args=["--disable-gpu", "--no-sandbox"]`, Chromium **151.0.7922.34 started, opened a page
+  and rendered text**, with `platform.machine()` reporting `aarch64`. That is not a
+  substitute for item 8 — this is an M-series laptop, not 2 OCPU of Ampere, and the crawl's
+  real memory curve is still unmeasured — but "the browser will not even start on ARM" is
+  now off the table.
+
+  **And the CI step that was supposed to catch all this could never have failed.** The
+  Chromium check landed on 09-12 runs `docker run --rm --platform … jobmatch:ci python3 -
+  <<'PY'` — **without `-i`**. Without `-i` the container gets `/dev/null` for stdin,
+  `python3 -` reads an empty program, and the step exits 0 having executed nothing. Measured
+  head-on: a script whose only statement was `sys.exit("THIS SHOULD FAIL")` **exited 0 and
+  printed nothing**; adding `-i` made the identical script print and exit 1. The 09-12 note
+  says that step "was made to fail before it was trusted" — the *script's logic* was, driven
+  against synthetic ELF headers, but the *step* never was, and the bug was in the wiring
+  around it rather than in the code being tested. `ci.yml` now passes `-i`, with a comment
+  saying why so it is not tidied away. So the arm64 leg of `image` has, until now, been
+  asserting nothing about Chromium at all.
+
+  **Verify:** `ssh deploy@host docker compose version` answers over key-only SSH with password
+  auth refused; `uname -m` on the box says `aarch64`; the subdomain resolves to the box from
+  off the network; ports 80 and 443 are reachable from outside, which on Oracle means **both**
+  the VCN security list and the instance's own iptables — Oracle's Ubuntu images ship a
+  default-REJECT ruleset, and a security-list rule alone leaves the port silently dead; and
+  CI's `image` job is green on `linux/arm64` before any of this is trusted.
 - [ ] **5. First boot, and the first certificate.** `.env` from `.env.example` — `SECRET_KEY`
   from `secrets.token_hex(32)` and not the dev key, `POSTGRES_PASSWORD`, `DOMAIN`,
   `ACME_EMAIL`, `PUBLIC_BASE_URL` — then `docker compose up -d --build --wait`, then
   `setpassword` for the first admin. Point `acme_ca` at staging for the first issuance and
   only then take it off, so a Caddyfile mistake costs a staging cert and not a week of the
-  real rate limit. **Verify:** `https://$DOMAIN/healthz` returns `{"status": "ok"}` over a
+  real rate limit. On item 4's ARM box the `--build` here is the **first real arm64 build**
+  of this Dockerfile and it will not be fast: the base image's browser layer is 832 MB
+  compressed and there is no warm cache on a fresh instance, so budget for it rather than
+  reading a slow first boot as a hang. **Verify:** `https://$DOMAIN/healthz` returns `{"status": "ok"}` over a
   publicly-trusted certificate; all six pages load; the session cookie carries `Secure`
   (which is `mark_deployed()` doing its job through gunicorn, the one path `wsgi.py` exists
   for); and `SSLLabs`/`curl -I` shows HSTS on the real host.
+
+  → **The box-free half landed 2026-09-17, and running it found that the first boot starts
+  crawling the job boards before the admin exists.** The whole of this item except the public
+  name was driven on a real four-container stack, from a `.env` copied out of `.env.example`
+  with exactly DEPLOY.md §2's table filled in (the one laptop deviation being
+  `CADDY_GLOBAL_OPTIONS=local_certs`, since the name has no public DNS):
+
+  - **`up -d --build --wait` brought all four containers up healthy in 14 s**, `/healthz`
+    answered `{"status": "ok"}` over a certificate that verifies against its issuing CA and
+    fails without it (curl exit 60), HSTS was on the response, and the landing page, `/login`,
+    the dashboard, `/jobs`, `/tracker` and `/settings` all loaded — five as a logged-in admin
+    created by `setpassword` inside the container. `/jobs/<id>` is the one page this could not
+    load: a fresh box's pool is empty until the first scan, which is item 8.
+  - **The scheduler queued a crawl ten seconds after `up`, and it was not the admin's.** At
+    +0.2 s the worker created the demo account; at +10 s it queued `scan 1 (schedule, requested
+    by 1)`; at +21 s it was crawling the live boards for real, on the demo persona's search
+    terms, and the admin did not yet exist. `due_for_scan` *has* a guard for this — "a fresh
+    instance with no account has no search settings either" — but it asked
+    `db.admin_user_id(conn) is None`, and that one falls back to the first account: on a
+    demo-enabled box the first account is the demo, created by the very worker the guard is
+    guarding. `db.has_admin` exists for exactly this distinction (its docstring says the demo
+    "may well be user 1 on a fresh box"), so the schedule now asks that instead. The two tests
+    that should have caught it sit in different files and each saw half: one deletes the only
+    account, the other checks the demo's `is_admin` flag and says in its own name that this is
+    what stops it triggering the shared crawl — true of the button, false of the schedule.
+    Re-measured after the fix: **45 s of an untouched fresh boot, 0 scans**, and the scan
+    queued within 10 s of `setpassword`, `requested by 2` — the admin.
+  - **`mark_deployed()` was made to fail before it was trusted.** With `HOST` at the
+    `127.0.0.1` the example ships — which is right, since gunicorn binds with `--bind` — the
+    container reported `config.SESSION_COOKIE_SECURE = False` while the cookie came back
+    `Secure; HttpOnly; SameSite=Lax`. Commenting the one call out of `wsgi.py` and restarting
+    dropped `Secure` from the header, and restoring it brought it back. That is the verify
+    clause above proven in the configuration where it is load-bearing rather than incidental,
+    and nothing in the suite had ever called either function.
+  - **Both startup refusals turn a first boot red rather than quiet.** A blank `SECRET_KEY`
+    and the `JOBMATCH_DEBUG=1` `.env.example` ships each made gunicorn's worker fail to boot,
+    the container restart-loop, and `docker compose up --wait` exit **1** with `web is
+    unhealthy` — which is item 6's healthcheck earning its place four days early. Both fired
+    with `HOST` still on loopback, because `wsgi.py` passes `deployed=True` rather than asking.
+  - **`tests/test_firstboot.py`** (15 tests) keeps all of it: the refusals, `mark_deployed`'s
+    four behaviours, that `wsgi.py` still calls both and still does not start a scan thread,
+    and that every environment variable any module reads is offered by `.env.example` — which
+    found `LOCAL_USER_EMAIL` missing from it. Every one was made to fail first, by mutating
+    the file it guards.
+
+  **Still Oliver's:** the box, the domain, the real ACME issuance, and a certificate a browser
+  trusts without being told to.
 - [ ] **6. Arm the pipeline — all six secrets.** `DEPLOY.md §6`, corrected to six.
   **Verify:** an empty commit on `main` goes green in CI, triggers `deploy.yml`, and the
   workflow's own `https://$DOMAIN/login` smoke test passes — and then a deliberately broken
   container makes the workflow *fail* rather than quietly serve a 502, because a deploy check
   that cannot fail is not a check (the same standard `restore-check.sh` was held to).
-- [ ] **7. A backup that survives the box.** Order a Hetzner Storage Box, set `REMOTE_TARGET`,
-  and put `backup.sh` on a nightly cron. `backup.sh` warns while it is unset, and it is right
-  to: a backup that only exists on the box is not a backup if the box is what dies.
-  **Verify:** `backup.sh` stops warning; then `restore-check.sh` run on the box against a dump
-  **pulled back from the Storage Box**, not the local copy — exit 0, all seven tables and the
-  `sum(match_score)` matched. The local-copy restore is already proven; the remote round trip
-  is the half that has not been.
+
+  → **The box-free half landed 2026-09-17, and it is the second half of that verify clause
+  — the one that does not need the box, because "can this check fail?" is answerable here.**
+  It could not. Both halves of the deploy's checking were driven rather than read, and each
+  was broken on purpose first:
+
+  - **`docker compose up --wait` cannot fail for a service that has no healthcheck.** Measured
+    on compose v2.39.2: a container that had exited 1 and restart-looped six times was printed
+    as `Healthy` and `--wait` exited **0**, in six seconds. `db` and `web` declared a
+    healthcheck; **`worker` and `caddy` did not** — so the A/B against the shipped file, with
+    the worker's command replaced by one that dies at boot, is exactly that: **before, `up
+    --wait` said `Container jobmatch-worker-1  Healthy` and exited 0** while the container sat
+    at `state=restarting exit=1 restarts=8`; after, `container jobmatch-worker-1 is unhealthy`,
+    exit 1. A deliberately broken *worker* deployed green, and nothing downstream noticed it —
+    the smoke test only ever reaches `web` through `caddy` — so the first thing that would have
+    told anyone is item 8 finding no scan had run, plus no digests and no demo reset. Both
+    services now declare one; the worker's asserts what a second process in that container can
+    actually see (the app imports, the database answers), which covers boot failures and a
+    vanished Postgres but **not a loop that is alive and wedged**, and says so.
+  - **The smoke test asserted only an HTTP status code**, so it could not tell "this commit is
+    live" from "something answers on this name": a parked nginx page at the same hostname
+    returned 200 and **the deploy went green**. That is not hypothetical on item 4's plan,
+    where the box is reclaimable and the subdomain's A record is set by hand. The fix was
+    already half-written and never wired: `config.py` and `.env.example` both say "the deploy
+    workflow passes the sha", and **`deploy.yml` never set `RELEASE` at all** — so `/healthz`
+    on the box would have reported `"release": "dev"` forever and every Sentry event would have
+    been tagged `dev`. The deploy now passes `RELEASE="$SHA"`, compose hands it to `web` and
+    `worker`, and the smoke test reads it back and compares. Confirmed end-to-end on the real
+    four-container stack: `/healthz` through Caddy answered the exact sha that was passed in.
+  - **Driven, not read.** The two shell bodies were pulled out of the shipped `deploy.yml` and
+    run the way Actions runs one (`bash -e`, the step's `env:` in the environment) against a
+    **real sshd** with stubbed `docker`/`git`, and a **real TLS endpoint**. The good path
+    exits 0 and the remote genuinely executes all five commands — which is the check ci.yml's
+    missing `-i` failed four days ago. Every failure now exits non-zero: compose unhealthy (1),
+    an absent commit (128), an unreachable box (255), a 502 (22), `/healthz` 503 (22), an
+    untrusted certificate (60), a parked page (1), and **a box still serving the previous
+    commit (1), which nothing could catch before**.
+  - **`tests/test_deploy.py`** (7 tests) keeps all of it from being tidied away: every service
+    declares a healthcheck and none disables it, the deploy still passes `--wait` and
+    `RELEASE="$SHA"`, the smoke test still reads `/healthz` back, and every secret the workflow
+    reads is named in `DEPLOY.md`. Each was **made to fail before it was trusted**, and that
+    caught one dead guard among them: `assertIn("--wait", …)` matched the word in the *comment*
+    above the command and passed with the flag deleted.
+
+  **Still Oliver's, and still the whole point of the item:** the six secrets, and a real run.
+- [ ] **7. A backup that survives the box — re-planned 2026-09-13 onto a free target.**
+  Item 4 went free on 2026-09-12 and left this one still saying "order a Hetzner Storage Box";
+  this is the same treatment. What matters is that the dump leaves the box, not who stores it.
+  Put `backup.sh` on a nightly cron with `REMOTE_TARGET` set — it warns while it is unset, and
+  it is right to: a backup that only exists on the box is not a backup if the box is what dies.
+
+  **The free path is an object store, and that is forced rather than chosen.** The obvious
+  free swap is a second Always Free VM, which would need no code change at all, since
+  `REMOTE_TARGET` was already an rsync/ssh target. It is the one option that cannot work.
+  Oracle's reclamation rule — the one item 4 plans around — applies to **compute instances
+  only**: their own doc says "Idle Always Free **compute instances** may be reclaimed", on
+  95th-percentile CPU < 20 % **and** network < 20 % **and** memory < 20 % (A1 only) over 7
+  days, and lists no such rule for Object Storage or block volumes. A machine whose entire job
+  is to receive one 5 MB file at 03:17 is idle by definition, so a backup VM is the resource
+  Oracle is likeliest to delete *for working correctly* — and it would take the backups with
+  it. Buckets are not subject to that rule.
+
+  **The target: an Oracle Object Storage bucket in the same EU home region as the box.**
+  Always Free gives **20 GB** combined Standard/Infrequent Access/Archive, **50 000 API
+  requests per month** and 10 TB/month of outbound transfer — against two objects a night and
+  a restore now and then, none of those is a limit this can reach. It also needs no new
+  account, no card, and no second machine to patch. One knock-on for item 4, verified on the
+  same page: **both Always Free compute shapes must be created in the tenancy's home region**,
+  and the home region is fixed at signup — so item 4's "Frankfurt or Amsterdam, so CVs stay in
+  the EU" is this item's decision too, made once, at signup, irreversibly.
+
+  **The honest weakness is that this is the box's own tenancy.** It survives every likely
+  death — the instance reclaimed, the boot volume lost, the box compromised — but not the
+  tenancy being closed. That is cheap to fix later precisely because the transport is now
+  `rclone`: a second vendor is a config line and a second cron entry, and Backblaze B2's
+  10 GB free tier (its own rclone backend) is the drop-in. Oracle also exposes an
+  S3-compatible endpoint with Customer Secret Keys, so nothing here is locked to one vendor.
+
+  **Sizing was measured, not estimated:** a gzipped dump of the live 7 970-job / 20 730-score
+  pool is **5.4 MB**, and the CVs 52 KB. Fourteen nightly copies is ~78 MB against 20 GB.
+
+  → **The box-free half landed 2026-09-13**, and writing it found two defects that a 1 TB
+  paid Storage Box would have hidden for years:
+  - **Nothing ever pruned the remote.** `backup.sh` deleted local copies older than
+    `KEEP_DAYS` and pushed to the remote forever. On a finite free tier that is a slow leak
+    with a certain end. There is now `REMOTE_KEEP_DAYS` (defaulting to `KEEP_DAYS`), pruning
+    by `--include` patterns so unrelated objects in the bucket are untouched — checked: a
+    30-day-old dump was deleted and a `NOTES.txt` of the same age was not.
+  - **Nothing could ever pull.** This item's verify has always demanded a restore from a dump
+    *pulled back from the remote*, and no code path fetched one — so the only thing that could
+    ever be restored was the local copy, which proves `pg_dump` works and proves nothing about
+    whether the off-box copy is real. `deploy/backup-pull.sh` now fetches it (`--latest` or a
+    stamp), into its own directory rather than over the local copy, because a round trip you
+    cannot tell from a local read is not a round trip.
+
+  `REMOTE_TOOL` (`rsync` | `rclone`) now selects the transport; the rsync arm is byte-for-byte
+  the old behaviour, for an ssh target that still makes sense. **Verified without a box**, by
+  driving the whole of `backup.sh` with a stubbed `docker` against a local rclone backend:
+  push, prune and pull all work, the pulled file is byte-identical to the dump, and restoring
+  it reproduces `jobs=7970`, `user_jobs=20730`, `sum(match_score)=167034.7` — the same three
+  numbers `restore-check.sh` compares. Each guard was **made to fail before it was trusted**:
+  a corrupt remote copy fails the pull, an empty remote fails `--latest`, an unknown
+  `REMOTE_TOOL` exits 2 before the dump rather than after it, and a colliding name is refused
+  with the existing backup intact. Driving it rather than reading it is what caught the
+  **first-ever run failing**: `rclone lsf` exits 3 with "directory not found" on a prefix that
+  does not exist yet, so under `set -e` the collision check turned night one into a failure
+  that copied nothing. A failed listing now means "nothing there to clash with" — and an
+  unreachable remote still exits non-zero, because the copy underneath it is the operation
+  that has to work.
+
+  **`--immutable` was the guard until it was measured.** `rclone copy --immutable` documents
+  "Source and destination exist but do not match: immutable file modified" for exactly this
+  case. On rclone v1.75.1 it logged `Copied (replaced existing)` and **exited 0**, replacing a
+  5.7 MB dump with a 391-byte file. It is now an explicit `lsf`-then-refuse check, because a
+  guard that cannot fire is worse than no guard — it is the one you stop checking.
+
+  **Verify (needs the box):** `backup.sh` on a nightly cron stops warning and the objects
+  appear in the bucket; then `backup-pull.sh --latest` on the box fetches one back and
+  `restore-check.sh` run **on that pulled file** exits 0 with all seven tables and
+  `sum(match_score)` matched. The local-copy restore was already proven and the round trip is
+  now proven against a local backend; what a real bucket still adds is the credentials, the
+  network and Oracle's own API — which is the half no laptop can cover.
 - [ ] **8. The first scheduled scan — which is the silent-board alarm's first real test.**
   Phase 8 built the alarm and said plainly what was still unproven: `ctx.seen()` counts what
   the parser found in *fixture* HTML, so whether the counts are right about profesia's and
@@ -850,28 +1157,397 @@ gated on an account and a domain, which is Oliver's to buy and nobody else's.
   the Playwright-in-a-container question at the same time. **Verify:** a scan reaches `done`;
   every enabled board reports a non-zero seen count; if one reports zero, the alarm has worked
   and that adapter's selectors are the next task, not a bug in the alarm. Watch memory against
-  the worker's 1500m limit while Chromium is up.
+  the worker's 1500m limit while Chromium is up — and on item 4's ARM box this is also the
+  first time an **aarch64** Chromium is launched by anything we own. The binary was confirmed
+  to be there and to be AArch64; that it *runs* under 1500m on 2 OCPU is what this item
+  measures. A Chromium that dies here is a `shm_size`/limit question, not a missing browser.
+
+  → **The box-free half landed 2026-09-22, and it is the half this item's own text called
+  unknown: whether the counts are right about the boards' live markup.** They are — all seven,
+  exactly — and checking it found that on Kariéra the alarm could not have fired anyway.
+
+  **Every enabled board was driven live from this laptop** (`search()` through a real
+  `ScanContext`, two terms, a 7-day window, every response kept) and each `ctx.seen()` report
+  was cross-checked against the response itself rather than against a fixture — the whole point,
+  since a fixture is where the count came from:
+
+  | board | seen | checked against | |
+  |---|---|---|---|
+  | Profesia.sk | 130 (20×6 + 10) | distinct `id="offerN"` per page — 20/20 on all seven pages | exact |
+  | Kariéra.sk | 6, 8 | the board's own *“Aktuálna ponuka práce (6)”* / (8) | exact |
+  | Jobs.cz | 749 | `article.SearchResultCard` — 749/749 across 26 pages; the board's own “Našli jsme 158 / 590 nabídek” | exact |
+  | Remote OK | 99 | 100 array elements, 99 carrying an `id` | exact |
+  | Remotive | 18 + 18 | the payload's own `job-count` | exact |
+  | Jobicy | 50 + 50 | the `jobs` arrays | exact |
+  | Arbeitnow | 800 | the `data` arrays, 250+250+100+100+100 | exact |
+
+  Two off-by-ones are the live feed moving, not a miscount: Jobs.cz served 591 rows for a stated
+  590 (590 distinct — one ad appeared twice across twenty pages as a new one shifted the window,
+  over four minutes of politeness delays), and Arbeitnow 800 rows / 799 distinct the same way.
+  `seen` counts rows served, which is the right thing for an alarm. Profesia's two 21-row pages
+  are a `li.list-row native-agent` — the e-mail-alert signup — correctly not counted as an offer.
+
+  **The finding is Kariéra's, and it is about whether the alarm can fire, not whether the number
+  is right.** Its `seen` was `len(div.offer) - len(div.offer.highlight)`: the card *container*,
+  computed outside `parse_offers` on a second `BeautifulSoup` pass. Profesia counts `listed`
+  only after the title, the href and the id have been read (“a redesign that leaves the rows in
+  place but moves the title or the link is still an offer we cannot read”), and Jobs.cz says the
+  same in its own comment — Kariéra was the one board of the three that did not, and it is the
+  one with no test for it. Measured by breaking the **live** page six ways and driving the real
+  `_search_term` over it: renaming the title heading, changing its `h2` to an `h3`, reshaping the
+  offer URL and dropping the id from it each left **`seen` at 6 while the parser read nothing** —
+  four silent redesigns out of six. Only the container class changing, and the results list
+  emptying, ever tripped it. `seen` now reports what was read, and all six fire.
+
+  **Pagination had to keep asking the other number, and that is not a detail.** Kariéra stops on
+  “fewer than `PER_PAGE` offers listed”, so had the read count simply replaced the card count,
+  the first page carrying a promoted `redirect.php` slot — most of them — would have ended the
+  crawl for that term. `parse_offers` now returns both (`listed` for the alarm, `rows` for the
+  page-is-full test) and parses the page once instead of twice. Five tests in
+  `KarieraSeenTests`, each **made to fail before it was trusted**: four mutations of the shipped
+  file (the alarm told the card count again; pagination asking the read count; a card counted as
+  read before its title link is found; an unreadable offer URL counted as read) are all caught,
+  and the last two would each have passed the suite as it stood this morning. 483 tests, ruff
+  clean. Re-probed live afterwards: **6 and 8, unchanged** — the fix alters nothing a healthy
+  board reports, only what a broken one does.
+
+  **One thing to know before item 9's sibling question comes up: Remotive's API has quietly
+  become a stub.** `search=python`, `search=developer`, `search=zzqqxxnonsense`, `category=…`
+  and `limit=100` all return the **same 18 jobs**, with `job-count: 18` — it now answers its
+  entire feed to every query and ignores every parameter. `seen` is right about it and the alarm
+  is right to stay quiet (the board *is* answering), but the crawl spends one request per search
+  term — nineteen on the default profile — to be handed the same eighteen jobs nineteen times.
+  → **Confirmed a second time on 2026-09-23 and now fixed.** The re-probe added the two
+  questions the first one had not asked, and both sharpen it: the **bare URL** — no parameters
+  at all — returns the identical eighteen ids as every query, and the payload's own
+  **`total-job-count` is 18**, so this is not "search is ignored" but "the public feed is
+  eighteen jobs", and there is nothing a request could ever narrow towards. Reading the
+  response also turned up the part that makes this more than an efficiency note: the
+  `0-legal-notice` the board sends with every answer asks for **"max. 4 times a day …
+  excessive requests will be blocked"**. Nineteen terms at `SCAN_INTERVAL_HOURS = 6` is 76 a
+  day. The adapter now reads the feed **once per scan** and filters on the terms in Python —
+  the shape Remote OK has always had, and the reason its docstring says the feed is the whole
+  board or nothing — and sends **no query parameters at all**, which is CLAUDE.md's
+  unconfirmed-parameter rule applied in the direction that removes one. `seen` was tightened
+  the same way item 8 tightened Kariéra's, since the loop was being rewritten anyway: it
+  counts rows an id and a title could be read off, not the length of the `jobs` array, so a
+  renamed field is a silent redesign the alarm can now catch. Driven live afterwards: **19
+  terms → 1 request, `seen` 18 (it was 342), 7 stubs in the 7-day window**, descriptions and
+  links intact. Eight tests in `RemotiveIsReadOnceTests`, **seven mutations of the shipped
+  file each made to fail first** — asking per term again, `seen` back on the array length,
+  counting a row before its id and title are read, counting it only once it is new, dropping
+  the local term filter, dropping tags from the haystack, and swallowing a failed fetch so a
+  dead board reads as an empty one. 509 tests, ruff clean.
+
+  **Still Oliver's, and still the whole of this item's verify:** a scheduled scan on the box
+  reaching `done`, every board non-zero *there*, and the worker's memory watched against its
+  1500m limit while an aarch64 Chromium is up.
 - [ ] **9. A real mail relay.** `DEPLOY.md §7` — a transactional relay, never the box itself.
   **Verify:** `digest --status`, then `--dry-run`, then one real `--force` send to a real
   inbox; it arrives, it is **not** in spam, and SPF and DKIM both show `pass` in the received
   headers. That is the half a socket on 127.0.0.1 could never cover.
+
+  → **The box-free half landed 2026-09-23: the socket on 127.0.0.1, which turned out to
+  cover rather more than this item assumed.** `tests/test_digest.py` replaces `mail.send`
+  with a recorder, so in the whole of Phase 8 nothing had ever built an `EmailMessage` and
+  put it on a wire — every TLS mode, the credentials, the envelope and every byte of the
+  message were untested. `tests/test_mail.py` now carries a real SMTP server (EHLO,
+  STARTTLS, AUTH LOGIN/PLAIN, MAIL FROM, RCPT TO, DATA, on a throwaway certificate) and
+  asserts against **what arrived**, never against the message object. Driving it found
+  three defects and a fourth on the way past:
+
+  - **No `Date` and no `Message-ID` on any message this app has ever sent.** Neither
+    `EmailMessage` nor `smtplib.send_message` writes one. `Date` is one of the two headers
+    RFC 5322 makes mandatory and a missing `Message-ID` is on Gmail's own list of what a
+    bulk sender must not do — and the reason it would never have been caught here is that
+    most relays silently add both, so "it arrived" proves nothing about the next relay.
+    Both are written now, the `Message-ID` domain being `MAIL_FROM`'s, plus
+    `Auto-Submitted: auto-generated` (RFC 3834) so an out-of-office cannot bounce back at
+    a bot address.
+  - **The bodies went out 8-bit under an envelope that never declared it.** `set_content`
+    defaults to `Content-Transfer-Encoding: 8bit`, and `send_message` adds `BODY=8BITMIME`
+    **only when an address needs UTF-8** — measured: `MAIL FROM:<bot@jobmatch.app> size=551`
+    and 15 bytes over 127 in the DATA. A relay without the extension may strip the high bit
+    or refuse the message, and every second Slovak title carries an á. Both parts are
+    `quoted-printable` now: **zero bytes above 127 on the wire**, and the accents decode back
+    intact (`Senior Python vývojár`, `Košice · plný úväzok`).
+  - **Credentials were handed to an unencrypted socket without complaint.** With `SMTP_SSL`
+    and `SMTP_STARTTLS` both off, the sink recorded `AUTH ('bot@jobmatch.app', 'hunter2')
+    encrypted=False`. `_transport` now asks the *socket* — `isinstance(smtp.sock,
+    ssl.SSLSocket)`, the fact rather than the intent — and refuses, with
+    `SMTP_ALLOW_INSECURE_AUTH` as the named escape hatch for a loopback relay.
+  - **EHLO was the machine's name, which in a container is not a name.** `socket.getfqdn()`
+    there is a dotless 12-hex hostname, and smtplib replaces that with a bare address
+    literal — measured, `[147.232.182.236]` from this laptop, which would be `[172.18.0.4]`
+    on the box, in every relay's log, on every message. It is `MAIL_FROM`'s domain now
+    (`MAIL_DOMAIN` overrides), so the name we give, the `Message-ID` and the From: domain
+    are one answer.
+
+  Two things were already right and now have a test rather than an assumption: the
+  **envelope sender is the From: address** (SPF authenticates the envelope, DMARC then asks
+  whether it aligns), and the relay's **certificate is verified** — an untrusted one raises
+  and sends nothing, which is the test that proves verification is on. So is header
+  injection through the recipient address, which `policy.default` already refuses.
+  **Nine mutations of the shipped files, each made to fail first**, including the digest's
+  own ordering: marking the jobs before the send instead of after is caught by a sink that
+  answers `550` to DATA. 501 passed / 12 skipped (from 483), ruff clean. `.env.example`
+  gained both new variables — found by item 5's guard, which failed the moment they did not.
+
+  **Still Oliver's:** the relay account, SPF and DKIM in real DNS, and whether a real inbox
+  files it under Primary or Spam.
 - [ ] **10. The live link.** `README.md`, `landing.html` and `PROJECT.md` all currently say
   there is no box; the CV bullets below say "built and deployed" and are one sentence short of
   true. **Verify:** the URL in the README opens the landing page on a phone off wifi; one tap
   on the demo button signs a stranger in cold; and the nightly reset has put it back the next
   morning.
 
+## Phase 10 — What is worth doing while the box is pending (planned 2026-09-25)
+
+**Phase 9 is still the ship line and still takes precedence.** Items 4–10 of it are blocked on
+one thing only — an Oracle A1 instance and a DuckDNS subdomain — and every half of them a
+machine without a box could do has landed (items 4, 5, 6, 7, 8, 9, plus item 8's own parked
+Remotive follow-up). The moment the box exists, Phase 9 resumes and this phase waits. This
+exists because "blocked" had come to mean "nothing to do", and that is not the same sentence.
+
+It is planned against the roadmap's own standing instruction — Phase 8 said to plan the
+`## Later` bucket *against a deployed thing* — and that instruction is knowingly overridden,
+for the two items below that are **not** about a deployed thing. Item 1 is a defect in the
+shipped image that is live today and measured. Item 3 is about the tree, not the box. Items 2
+and 4 reduce what the first box session has to discover. Nothing here speculates about how a
+deployment will behave in production, which is the thing Phase 8 was right to refuse.
+
+- [x] **1. The login rate limit does not hold, and it is the shipped image that breaks it.**
+  This has been in `## Later` as "in-memory and per-process — honest for one gunicorn worker,
+  wrong for two", filed as the day the web tier scales. The web tier already scaled:
+  `Dockerfile`'s `CMD` ships `--workers 2` and `config.RATELIMIT_STORAGE_URI` defaults to
+  `memory://`, so each worker counts its own bucket. Measured through Caddy on the real stack
+  during Phase 9 item 3: **30 CSRF-valid POSTs against `/login`'s `10 per minute` got 20
+  through before the first 429.** `/login` is the brute-force surface, `CLAUDE.md` lists rate
+  limits on the credential endpoints as a safety convention, and the limit is not just doubled
+  but *non-deterministic* — which worker a request lands on decides whether it counts.
+
+  **The fix is one process, not a shared store** (decided 2026-09-25): `--workers 1 --threads N`.
+  The web tier is I/O-light — scanning lives in the worker container, and the one CPU-bound
+  request is a CV upload parsing a PDF inline, which is what the generous `--timeout 120` is
+  already for — so threads keep the "one slow request away from looking down" property the
+  Dockerfile comment gives as the reason for two workers, and make the in-memory limiter
+  correct by construction rather than by a fifth container. `RATELIMIT_STORAGE_URI` stays
+  exactly where it is for the day a second process is genuinely wanted; redis was considered
+  and declined, since `CLAUDE.md` already refuses that dependency for scheduling and a 12 GB
+  Always Free box is not short of anything a redis would buy.
+
+  **Threads change what the process has to be safe about, and that is the real work here** —
+  `--workers 2` was declared safe in Phase 4 on the grounds that scan state lives in the
+  `scans` row rather than a module global, which is an argument about *processes* and says
+  nothing about two requests inside one. Three things to settle rather than assume:
+  `db._ENGINES` is a plain module-level dict populated on first use, so two threads can race
+  to create an engine (SQLAlchemy engines and pools are themselves thread-safe; the cache
+  around them is what is not); the default `QueuePool` is `pool_size=5 / max_overflow=10`, so
+  15 connections is the real concurrency ceiling and `N` must be chosen against it, not
+  against the CPU count; and `app._deployed` is set once at import by `wsgi.py`, which is
+  fine, but it should be *checked* to be the only mutable module state on a request path.
+
+  **Then make the combination unable to come back.** The limiter's correctness now depends on
+  a number in a `CMD` string that nothing reads — exactly the shape of defect Phase 9 kept
+  finding. gunicorn honours the `WEB_CONCURRENCY` environment variable for its default worker
+  count (**confirm this against the gunicorn in the image before building on it** — it is not
+  installed on this laptop, so it has not been checked here); if it does, set the count there
+  instead of in `CMD` and have the app refuse at boot when `WEB_CONCURRENCY > 1` and the
+  storage URI is still `memory://`, alongside the two startup refusals `test_firstboot.py`
+  already guards. If it does not, a test asserting the shipped `CMD` is single-process while
+  the default storage is in-memory is the fallback, and worth less.
+
+  **Verify:** the Phase 9 item 3 measurement re-run unchanged on the four-container stack
+  through Caddy — 30 POSTs to `/login`, and the 11th is a 429, not the 21st; the app still
+  serves a slow request and a second concurrent one (the property two workers were bought
+  for); and the new refusal is **made to fail before it is trusted**, by setting
+  `WEB_CONCURRENCY=2` against `memory://` and watching `up --wait` exit non-zero.
+
+  → **Landed 2026-09-25, and every clause was measured on the four-container stack** (built
+  from this tree, `DOMAIN=localhost` + `local_certs`), not reasoned about.
+
+  `Dockerfile`'s `CMD` is now `--threads 8` and passes **no** `--workers`, so gunicorn takes
+  the count from `WEB_CONCURRENCY` — `default = int(os.environ.get("WEB_CONCURRENCY", 1))`,
+  read out of **gunicorn 26.2.0 in the image**, which is the assumption the item flagged as
+  unverified and is now confirmed rather than assumed. The container shows one master + one
+  `gthread` worker. **8 is chosen against the pool, not the CPU count**: every request holds
+  exactly one `g.db` connection for its life and the default `QueuePool` is 5 + 10, so 15 is
+  the ceiling — asserted in a test that reads the live pool, and made to fail at 32 threads.
+
+  **The measurement, both ways on one stack.** Shipped config: 30 CSRF-valid POSTs to
+  `/login` through Caddy, first 429 at **#11**, 10 through. Then the *old* `CMD`
+  (`--workers 2`) re-run on that same stack — because a number with nothing to compare it to
+  proves nothing — gave **20 through, first 429 at #15**, not #11 and not #21: the
+  non-determinism the item was really about. That run also demonstrates *why* the count had
+  to leave `CMD`: with `--workers 2` in the command and `WEB_CONCURRENCY` still 1, the new
+  refusal saw nothing wrong and the container booted happily.
+
+  **The property two workers were bought for survives, and the check can fail.** A request
+  whose body dribbles in over 6 s holds a thread; a concurrent `GET /healthz` answered in
+  **0.04 s**. The same script against a deliberately single-threaded `--workers 1` waited
+  **4.71 s** — blocked until the slow request finished.
+
+  **The refusal was made to fail before it was trusted.** `WEB_CONCURRENCY=2` against
+  `memory://`: `docker compose up -d --wait web` exited **1** with `web is unhealthy`, and
+  the container log carries the RuntimeError naming both values. Five unit cases pin the
+  boundary (2 + memory refused, refused on loopback too since this is not about exposure,
+  1 + memory is the shipped case, 4 + `redis://` accepted, limits disabled accepted).
+
+  **Threads made module state a live question, which is the half `--workers 2` never had to
+  answer.** `db._ENGINES` was a plain dict: 8 threads racing through a barrier built **8
+  separate engines** in 12 runs out of 12, i.e. 8 QueuePools of 5+10 behind a thread count
+  chosen for one — now double-checked under a lock, 12/12 green, with the fast path still a
+  bare dict read. `auth._DUMMY_HASH` races too and is left unlocked **on purpose** (both
+  threads produce a valid hash of the same string, and the function's whole job is to spend
+  that time). `app._deployed` and `obs._configured` are boot-path only. Suite 509 → **519
+  passed / 12 skipped**. `PROJECT.md`, `README.md`, `DEPLOY.md` and a new `CLAUDE.md`
+  invariant were corrected in the same pass, since this change is what made them false.
+
+- [ ] **2. Measure the crawl's memory curve under the worker's own limit.** Phase 9 item 4
+  proved an aarch64 Chromium *starts* inside the image under `--memory=1500m --shm-size=512m`
+  and rendered a page; it said in the same breath that "the crawl's real memory curve is still
+  unmeasured", and item 8 owns the measurement on the box. Half of that is not actually about
+  the box: a 1500m cgroup limit is the same 1500m here, and a Profesia crawl that peaks over
+  it on this laptop would peak over it on Ampere too. What this laptop cannot answer is
+  *speed* on 2 OCPU, and it should not pretend to.
+
+  Run a real crawl — the default profile, the full 7-day window, every enabled board, Chromium
+  up for the Profesia and Jobs.cz legs — inside the image under the worker service's own
+  compose limits, sampling RSS rather than reading a single number at the end, because the
+  question is the peak and a browser's peak is not where it finishes. The known risk is
+  `shm_size`: Chromium in a container dies on a small `/dev/shm` in a way that reads as a
+  crash rather than an OOM, which is why the item-8 text says a Chromium that dies there is a
+  limit question and not a missing browser.
+
+  **Verify:** a full crawl completes inside the container with peak RSS recorded against the
+  1500m limit, with the headroom stated as a number; and the limit is **shown to be the thing
+  that binds** by re-running one Playwright board under a deliberately low `--memory` and
+  watching it fail — a headroom figure from a limit that could never have been hit is not a
+  measurement. Whatever the number, Phase 9 item 8 still owns the box.
+
+- [ ] **3. A document may not assert a count the tree can contradict.** Phase 9 item 3 re-read
+  every claim in `PROJECT.md` against the tree on 2026-09-12 and corrected four numbers. Eleven
+  days later three of them are wrong again: it says **433 tests** (the suite runs **519 passed
+  / 12 skipped** as of item 1's ten new cases), it says Built covers "Phase 8 plus the first two items of Phase 9" (items 1–3
+  are done and six box-free halves have landed since), and `## Later` still carries "`IDEA.md`
+  is still empty, and only Oliver can fill it" — which commit `6ed3dfe` made false. Correcting
+  them by hand is a day's accuracy; the item worth doing is the one that stops the recurring
+  edit, since this is now the second pass over the same sentences.
+
+  Every stale claim so far has been a **count**, and a count is the kind of assertion a command
+  can answer: the test total, the adapter total (the registry, not the folder — `base.py` is
+  not one, which item 3 got wrong in the other direction), the job-pool row count, the page
+  count. A checker that scrapes those four out of the docs and compares them against the tree
+  turns the staleness into a red run. Deliberately **not** in scope: prose claims, decisions
+  and rationale — those are what `PROJECT.md` is for, a checker cannot judge them, and trying
+  would produce a test that gets deleted.
+
+  **Verify:** the checker is green on the tree only after the three stale claims above are
+  corrected, and is **made to fail before it is trusted** — edit one number in `PROJECT.md` and
+  one in `README.md` and watch it name both the file and the claim; then wire it into CI, since
+  a checker nothing runs is a file nobody opens.
+
+- [ ] **4. The EU-remote reach leak, which only more boards can close.** `## Later`: `remoteok`
+  and `remotive` cannot be geo-narrowed at all, so a European user's remote reach is whatever
+  those feeds happen to carry. Phase 8 named three candidates, shipped `jobscz`, and refused
+  `nofluffjobs` and `startup.jobs` **on their own robots.txt**, verified live — that refusal
+  stands and is not to be revisited. It also left a mark worth reading as a spec: PLN, GBP and
+  CHF have conversion rates in `salary.EUR_RATES` and **no jobs**, because the two boards that
+  would have brought PLN and GBP are exactly the two that were refused.
+
+  So this is a sourcing question before it is a coding one, and the sourcing half is the item:
+  find candidates, check `robots.txt` and the terms **first**, probe the feed live, and write
+  down what each one is refused or accepted for — a board rejected politely and recorded is
+  worth as much here as one that ships, which is the lesson of the two above. Adding one is
+  then the one-file change `CLAUDE.md` describes, plus the two places a new board is easy to
+  forget: `db.DEFAULT_SETTINGS` and `places.SOURCE_DEFAULT`. `ctx.seen()` must count rows the
+  parser could *read*, the way Kariéra and Remotive were both corrected to, and the board's
+  own rate-limit ask must be read out of its responses rather than assumed — Remotive's lives
+  in a `0-legal-notice` field nobody would have looked for.
+
+  **Verify:** each candidate's `robots.txt` verdict recorded with the line it turns on; at
+  least one adapter driven live through a real `ScanContext` with its `seen` count cross-checked
+  against the board's own stated total, not against a fixture; and the new rows land with a
+  country packed into `jobs.countries`, so the reach the board was added for is actually
+  reachable by the filter and the scorer.
+
+## Off-roadmap — the role component (built 2026-09-10, verified and recorded 2026-09-12)
+
+Not planned in any phase: it was built directly, outside the roadmap, and sat uncommitted
+and unrecorded for two days — no roadmap item, no changelog line, no claim row. It is written
+down here because a scoring change of this size vanishing into a working tree is the same
+failure Phase 9 item 1 existed to fix, and because `CLAUDE.md` now carries two new invariants
+that nothing in the plan explains.
+
+**What it is.** A fifth scoring component, `role`, which reads `jobs.title` — the one field
+every posting has and the first thing a human reads — plus a floor under the skills
+denominator (`config.MIN_SKILL_EVIDENCE = 3`). The other four components could not tell what
+a job *was*: a description mentioning one skill gave `skills` a perfect 1.0, and the title
+was not read at all. Default weights move from four summing to 1 to five summing to 1
+(`skill` .3, `role` .25, `worktype` .2, `location` .15, `seniority` .1); an account that
+predates it keeps its four stored weights and picks `role` up from `DEFAULT_SETTINGS`, since
+`get_all_settings` merges defaults *under* stored rows — so no backfill, and nothing
+renormalizes because `score_job` divides by the weight it actually used.
+
+- [x] **Verified against the live 7 970-job pool**, read-only through a `.backup()` copy under
+  `DATA_DIR=<scratch>`, scoring every row both ways rather than trusting the write-up.
+  **The old top of the list was entirely junk, all tied at a perfect 100**: "junior actuarial
+  reporting analyst", "werkstudent künstliche intelligenz", "pre-sales engineer (campania)",
+  "identity & pam security engineer". The new top is "lead software engineer — python",
+  "lead react native engineer", "web frontend engineer — js, css, react". Perfect-100s go
+  **83 → 0** for user 1 and **32 → 0** for user 3; above-threshold 2447 → 2101.
+  The story `CLAUDE.md` tells is literally true and was checked row by row: job 2980 is
+  `junior esg consultant (m/f)` with exactly one extracted skill, `html`, and it scored
+  **100.0 for both users** before and 20.5 / 50.2 after. The documented extraction rates hold
+  to the decimal — one skill in 426 of 3 454 described jobs (12.3 %, "~12 %") and none in
+  1 421 (41.1 %, "~41 %").
+  **Each half does most of the work independently**, which the write-up did not say: role
+  alone takes user 1's perfect-100s 83 → 9, the skills floor alone 83 → 2, together 0. The
+  floor is what breaks the ties; the role component is what fixes the ranking.
+- [x] **Mutation-tested, and three of six mutants survived** — so the 19 new tests were not
+  vacuous, but they were incomplete in exactly the places `CLAUDE.md` states as invariants.
+  Killed rather than waved through, +3 tests (433 → 452 → **455 passed / 12 skipped**):
+  - **A role miss returning `None` instead of `0.0` passed the whole suite.** The existing
+    test asserted `role == scoring.ROLE_MISS`, which compares the constant with itself and
+    stays green when it is redefined. Measured consequence: with `ROLE_MISS = None` the miss
+    is *excluded* from the weighted mean and "junior esg consultant" scores **100.0 —
+    identical to "junior react developer"**, the precise bug the component exists to fix.
+    Now pinned against the literal `0.0` and against the two jobs not tying.
+  - **Not stripping `ROLE_LEVEL_WORDS` passed too.** The existing test used "junior",
+    "graduate", "student", none of which match a discipline word either way. "trainee" does:
+    it contains **"ai"**, one of the words `data` is written with, so a person searching for
+    trainee roles would be classified a data specialist and every "AI Engineer" in the pool
+    would jump a rung.
+  - **Dropping `search_terms` from `RESCORE_KEYS` passed.** `app.py`'s own comment says
+    editing it must re-score — the field is two settings in one, telling the crawl what to
+    fetch *and* the scorer which disciplines the user wants — and nothing tested it, so
+    saving Settings could change what "frontend" means and leave every score stale.
+  All six mutants now fail; `jobmatch/scoring.py` and `app.py` restored byte-identical
+  afterwards, `ruff check` clean.
+
+**Left undone on purpose:** not committed (this repo's rule is that Oliver commits), and
+`CLAUDE.md`'s "77 jobs tied at 100" is a historical measurement — the same count is 83 today
+against a pool that has grown from 6 842 to 7 970, so it was left as written rather than
+churned into a number that goes stale again with the next scan.
+
 ## Later (post-launch — deliberately unplanned)
 
 Phase 8's instruction stands: plan these against a deployed thing. Kept here so they are not
-re-derived from scratch.
+re-derived from scratch. **Emptied on 2026-09-25** — the bucket held three bullets and none of
+them survived being re-read:
 
-- Rate-limit storage is in-memory and per-process — honest for one gunicorn worker, wrong for
-  two. `RATELIMIT_STORAGE_URI` is where a redis URL goes on the day the web tier scales.
-- `remoteok` and `remotive` cannot be geo-narrowed at all, which is where the EU-remote reach
-  still leaks; more boards is the only lever, and the two obvious ones were refused on their
-  own robots.txt.
-- `IDEA.md` is still empty, and only Oliver can fill it.
+- ~~Rate-limit storage is in-memory and per-process.~~ **Promoted to Phase 10 item 1.** It was
+  filed as "wrong for two workers, on the day the web tier scales"; the shipped `Dockerfile`
+  already runs two, so it stopped being a future item the moment that `CMD` was written.
+- ~~`remoteok` and `remotive` cannot be geo-narrowed, so the EU-remote reach leaks.~~
+  **Promoted to Phase 10 item 4.** This one genuinely wanted a deployed thing, and still does
+  for the *judgement* — whether the reach is thin is a question for a real user with real
+  scores — but the sourcing half (robots.txt, terms, a live probe) needs no box and is the
+  half that gates the other.
+- ~~`IDEA.md` is still empty, and only Oliver can fill it.~~ **False since `6ed3dfe`**, which
+  filled it with the original itch. It is one line under its placeholder comment rather than
+  the paragraph the placeholder asks for, which `PROJECT.md` already says in its rough edges —
+  so it is recorded in one place instead of two.
 
 
 ---

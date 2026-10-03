@@ -280,7 +280,10 @@ def _run_scan(state, conn):
         settings = db.get_all_settings(conn, db.admin_user_id(conn))
         sources = get_enabled(settings["enabled_sources"])
         terms = [t for t in settings["search_terms"] if str(t).strip()]
-        days = int(settings["scan_days"]) or None
+        # Bounded by `config.scan_window` rather than trusted: the stored value
+        # is the admin's, and a window of 0 ("all the way back") is what fills
+        # the enrich backlog faster than a polite scraper can drain it.
+        days = config.scan_window(settings["scan_days"])
 
         # *Where* is the one thing the crawl does not take from the admin: the
         # pool is shared, so it is the union of every account's reach, and it
@@ -479,23 +482,63 @@ EXTRACTED_COLUMNS = ("skills", "worktype", "seniority", "employment_type")
 
 
 def _enrich_phase(state, conn, page):
+    """Fetch the descriptions the search phase could not bring back.
+
+    This reads the whole pool's pending rows, not just the ones this scan
+    found: a detail fetch can fail, and a later scan retrying it is the only
+    thing that ever repairs that. Two bounds make it survivable.
+
+    **Newest first.** An interrupted run must leave behind the rows somebody is
+    about to read, not the oldest ones in the table. Ordered by `id` it did the
+    exact opposite — a scan spent its delays on rows from three weeks ago and
+    died before reaching anything found that morning, so the jobs on the Jobs
+    page stayed unscored no matter how many times it ran.
+
+    **A ceiling on fetches, not on rows considered.** A feed board costs
+    nothing to skip, so only a real fetch is counted against
+    `config.MAX_DETAIL_FETCHES`; what is left waits for the next scan, which is
+    the same "is the last one older than the interval?" schedule everything
+    else here runs on.
+    """
     pending = conn.execute(
-        "SELECT id, source, link FROM jobs WHERE TRIM(description) = '' ORDER BY id"
+        "SELECT id, source, link FROM jobs WHERE TRIM(description) = '' "
+        "ORDER BY COALESCE(posted_at, scraped_at) DESC, id DESC"
     ).fetchall()
 
-    for i, job in enumerate(pending, 1):
-        if state.stopped():
-            return
+    def costs_a_fetch(job):
         source = SOURCES.get(job["source"])
-        if source is None or (source.needs_browser and page is None):
-            continue
         # A feed board has no detail page to read: asking it would burn a
         # politeness delay to be handed '' — and, worse, count as a failed read.
-        if not source.has_detail_page:
+        # A browser board with no browser this run is skipped just as cheaply.
+        return bool(source and source.has_detail_page
+                    and not (source.needs_browser and page is None))
+
+    # The denominator the strip shows is what this run will actually attempt,
+    # not how deep the queue is — "29 of 4516" was a progress bar promising
+    # fifteen hours of fetching, which is a number nobody can act on.
+    outstanding = sum(1 for job in pending if costs_a_fetch(job))
+    budget = min(outstanding, config.MAX_DETAIL_FETCHES)
+    fetched = 0
+
+    for job in pending:
+        if state.stopped():
+            return
+        if not costs_a_fetch(job):
             continue
+        if fetched >= budget:
+            # Not an error: the rest of the queue is the next scan's, and
+            # saying so is the only way a shrinking backlog is visible at all.
+            log.info(
+                "enrich stopped at the %d-fetch ceiling; %d descriptions still pending",
+                config.MAX_DETAIL_FETCHES, outstanding - fetched,
+                extra={"scan_id": state.scan_id},
+            )
+            return
+        source = SOURCES[job["source"]]
+        fetched += 1
         ctx = _source_context(state, source)
         state.set_phase(
-            f"Reading job descriptions on {source.label} ({i} of {len(pending)})"
+            f"Reading job descriptions on {source.label} ({fetched} of {budget})"
         )
 
         description = ""

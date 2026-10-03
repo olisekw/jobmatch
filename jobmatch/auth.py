@@ -87,6 +87,11 @@ def dummy_verify(password):
     takes argon2's full work factor — which turns the login form into a way to
     enumerate who has an account here.
     """
+    # Two threads can both find it None and both hash (the web tier is one
+    # process with `--threads 8`). Deliberately unlocked: the loser's hash is
+    # thrown away, both are valid argon2 hashes of the same string, and the
+    # point of this function is to *spend* that time anyway. Locking would
+    # serialize the one call whose whole purpose is to be slow.
     global _DUMMY_HASH
     if _DUMMY_HASH is None:
         _DUMMY_HASH = hash_password("no-account-at-this-address")

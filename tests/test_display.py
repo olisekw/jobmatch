@@ -30,6 +30,53 @@ class TestLabels(unittest.TestCase):
         )
 
 
+class TestScoreComponents(unittest.TestCase):
+    """The five components are named once, and everything else reads that list.
+
+    They used to be written out in `app.js`, in the Settings sliders and in the
+    landing page's prose, which is how the landing page came to describe four
+    components months after there were five.
+    """
+
+    def test_the_weight_keys_are_exactly_the_ones_the_route_normalizes(self):
+        import app
+
+        self.assertEqual(
+            {c["weight_key"] for c in display.score_components()},
+            set(app.WEIGHT_KEYS),
+            "a component whose weight the PUT does not normalize, or the reverse",
+        )
+
+    def test_every_component_has_a_word_for_itself(self):
+        for c in display.score_components():
+            self.assertTrue(c["label"], f"{c['key']} has no label")
+            self.assertTrue(c["key"])
+
+    def test_the_order_is_the_one_the_bars_are_drawn_in(self):
+        # Role first: it is the component known for every scored job, so it is
+        # the one a reader should meet before the four that can be unknown.
+        self.assertEqual(display.score_components()[0]["key"], "role")
+
+    def test_the_weight_messages_are_derived_from_the_same_names(self):
+        # `WEIGHT` is what a validation error calls a weight. Deriving it is what
+        # stops "Worktype" and "The worktype weight" drifting apart.
+        self.assertEqual(display.WEIGHT["weight_skill"], "The skills weight")
+        self.assertEqual(
+            set(display.WEIGHT), {c["weight_key"] for c in display.score_components()}
+        )
+
+
+class TestJobSort(unittest.TestCase):
+    def test_every_ordering_the_server_can_run_has_a_name(self):
+        from jobmatch import db
+
+        self.assertEqual(
+            set(display.JOB_SORT), set(db.JOB_ORDER),
+            "the Sort dropdown is built from these, so an unnamed ordering is "
+            "unreachable and a named one the server cannot run is a 500",
+        )
+
+
 class TestRelativeDate(unittest.TestCase):
     TODAY = datetime(2026, 8, 11).date()
 
@@ -42,9 +89,16 @@ class TestRelativeDate(unittest.TestCase):
         self.assertEqual(self.rel("2026-08-08"), "3 days ago")
         self.assertEqual(self.rel("2026-08-06"), "5 days ago")
 
-    def test_a_week_or_more_falls_back_to_a_date(self):
-        self.assertEqual(self.rel("2026-08-04"), "last week")
-        self.assertEqual(self.rel("2026-07-12"), "12 Jul")
+    def test_the_day_count_survives_past_a_week(self):
+        """A job board's ages are read in days; "last week" hid the digit."""
+        self.assertEqual(self.rel("2026-08-04"), "7 days ago")
+        self.assertEqual(self.rel("2026-08-03"), "8 days ago")
+        self.assertEqual(self.rel("2026-07-28"), "14 days ago")
+
+    def test_past_a_month_a_date_is_the_shorter_sentence(self):
+        self.assertEqual(self.rel("2026-07-11"), "31 days ago")
+        self.assertEqual(self.rel("2026-07-10"), "10 Jul")
+        self.assertEqual(self.rel("2026-06-12"), "12 Jun")
 
     def test_another_year_carries_the_year(self):
         self.assertEqual(self.rel("2025-07-12"), "12 Jul 2025")

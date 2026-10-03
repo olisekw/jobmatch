@@ -22,7 +22,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JobMatch — every job on six boards, scored against your CV</title>
+  <title>JobMatch — every job on {{ board_count }} boards, scored against your CV</title>
   <meta name="description" content="JobMatch scans Slovak and international job
         boards, scores every posting 0–100 against your CV and preferences, and
         tracks where you applied.">
@@ -50,7 +50,7 @@
     {% endwith %}
 
     <section class="hero" id="top">
-      <h1>Every job on six boards, scored against your CV.</h1>
+      <h1>Every job on {{ board_count }} boards, scored against your CV.</h1>
       <p class="lede">
         JobMatch scans Slovak and international job boards on a schedule, reads
         each posting, and scores it 0–100 against your skills, your location and
@@ -86,19 +86,20 @@
 
     {{ shot("jobs",
         "The Jobs page: a filtered list of postings, each with a 0–100 match
-         score and the four bars it is made of.",
-        "The Jobs page. Every row carries its score and the four components
-         behind it.") }}
+         score, opened on one row to show the five bars it is made of.",
+        "The Jobs page. Every row carries its score, and opens onto the five
+         components behind it.") }}
 
     <section id="what">
       <h2>What it does</h2>
       <div class="cols">
         <div>
-          <h3>Scans six boards, once</h3>
+          <h3>Scans {{ board_count }} boards, once</h3>
           <p>
-            Profesia.sk and Kariéra.sk for Slovakia, Remote OK, Remotive, Jobicy
-            and Arbeitnow for everything remote. One scheduled crawl serves every
-            account — nobody's signup makes the boards get hit harder.
+            Profesia.sk and Kariéra.sk for Slovakia, Jobs.cz for Czechia, and
+            Remote OK, Remotive, Jobicy and Arbeitnow for everything remote. One
+            scheduled crawl serves every account — nobody's signup makes the
+            boards get hit harder.
           </p>
         </div>
         <div>
@@ -123,7 +124,7 @@
     <section class="scoring">
       <h2>How the score works</h2>
       <p class="lede">
-        Four components, each 0–1, weighted by how much you care about them —
+        Five components, each 0–1, weighted by how much you care about them —
         and the weights are yours to move.
       </p>
 
@@ -132,6 +133,9 @@
         <b>known</b> — see below.</p>
 
       <dl class="components">
+        <dt>Role</dt>
+        <dd>What the title says the job <i>is</i> — the one component every
+            posting can answer.</dd>
         <dt>Skills</dt>
         <dd>How much of what the ad asks for is on your CV.</dd>
         <dt>Work type</dt>
@@ -168,14 +172,14 @@
           "The dashboard, and when the boards were last scanned.") }}
       {{ shot("job",
           "A job detail page with the full description and the score broken
-           into four labelled bars.",
+           into five labelled bars.",
           "A posting, with the score opened up.") }}
       {{ shot("tracker",
           "The tracker: one row per application with its status, the date it
            was sent and a note.",
           "The tracker, one row per application.") }}
       {{ shot("settings",
-          "Settings: four weight sliders, a match threshold and the CV upload.",
+          "Settings: five weight sliders, a match threshold and the CV upload.",
           "Settings — the sliders that move every score.") }}
     </div>
 

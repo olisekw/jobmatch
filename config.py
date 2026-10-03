@@ -13,12 +13,31 @@ BASE_DIR = Path(__file__).parent
 
 # A local `.env` is a convenience, not a requirement: real deployments inject
 # the environment directly, so a missing python-dotenv must not break startup.
+# But "not fatal" is not the same as "silent", and the difference cost a week of
+# this instance's life: with python-dotenv absent from the interpreter actually
+# running `app.py`, a fully populated `.env` was read by nobody — the app served
+# on the built-in dev SECRET_KEY and the worker crawled on the default interval,
+# while the file on disk said otherwise and every edit to it changed nothing.
+# So the file's existence is the thing that makes its loss worth reporting:
+# `DOTENV_IGNORED` is checked by `app.check_runtime_config`, which refuses to
+# boot a deployment that way and warns loudly on a laptop.
+DOTENV_PATH = BASE_DIR / ".env"
+DOTENV_IGNORED = False
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(BASE_DIR / ".env")
-except ImportError:
-    pass
+    load_dotenv(DOTENV_PATH)
+except ImportError:  # pragma: no cover - depends on what is installed
+    DOTENV_IGNORED = DOTENV_PATH.exists()
+
+# One wording, because both entrypoints report it and they must not describe the
+# same silence two ways: the web tier refuses to boot a deployment on it, the
+# worker logs it.
+DOTENV_IGNORED_MESSAGE = (
+    f"{DOTENV_PATH} exists but python-dotenv is not installed, so nothing in it "
+    "is being read — SECRET_KEY, the scan interval and the SMTP settings are all "
+    "at their built-in defaults. Run: pip install -r requirements.txt"
+)
 
 
 def _env_bool(name, default):
@@ -136,10 +155,24 @@ ALLOW_SIGNUP = _env_bool("ALLOW_SIGNUP", True)
 # rules push people towards "Password1!" and buy nothing.
 MIN_PASSWORD_LENGTH = _env_int("MIN_PASSWORD_LENGTH", 10)
 
-# Flask-Limiter backend. In-memory is per-process and resets on restart, which
-# is honest for one gunicorn worker; Phase 5 can point this at redis://.
+# Flask-Limiter backend. In-memory is per-process: correct for one web process,
+# and silently wrong for two — each counts its own bucket, so `10 per minute`
+# became 20 and *which* worker a request landed on decided whether it counted.
+# Measured through Caddy: 30 POSTs to /login got 20 through before the first
+# 429. The fix is one process (see WEB_CONCURRENCY below), not a shared store;
+# this stays here for the day a second process is genuinely wanted.
 RATELIMIT_STORAGE_URI = os.environ.get("RATELIMIT_STORAGE_URI") or "memory://"
 RATELIMIT_ENABLED = _env_bool("RATELIMIT_ENABLED", True)
+
+# gunicorn's own name for the worker-process count: its `workers` setting
+# defaults to `int(os.environ.get("WEB_CONCURRENCY", 1))` (confirmed against
+# gunicorn 26.2.0 in the image). The Dockerfile therefore passes no `--workers`
+# at all, so this variable is the only thing that sets it and a `CMD` string
+# cannot disagree with the limiter. Read here purely so `check_runtime_config`
+# can refuse the one combination that is wrong — >1 process against an
+# in-memory limiter. Concurrency inside the one process is `--threads`, which
+# the in-memory limiter is fine with because it is one bucket in one heap.
+WEB_CONCURRENCY = _env_int("WEB_CONCURRENCY", 1)
 
 # How many reverse proxies sit in front of the app — 1 for the Caddy in
 # docker-compose.yml, 2 if a CDN is added later. Only consulted by
@@ -207,12 +240,23 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
 SMTP_SSL = _env_bool("SMTP_SSL", SMTP_PORT == 465)
 SMTP_STARTTLS = _env_bool("SMTP_STARTTLS", not SMTP_SSL)
 SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 30)
+# A password sent over an unencrypted socket is a password on the wire, and
+# `jobmatch.mail` refuses to do it: with both SMTP_SSL and SMTP_STARTTLS off,
+# AUTH would hand the relay credentials in the clear. The escape hatch exists
+# for the one case where it is not a mistake — a relay on the box's own
+# loopback — and has to be asked for by name.
+SMTP_ALLOW_INSECURE_AUTH = _env_bool("SMTP_ALLOW_INSECURE_AUTH", False)
 
 # Who the digest comes from. Defaults to the SMTP username because that is the
 # address a relay will let us send as; a different From: usually needs the
 # domain to be verified with the provider first.
 MAIL_FROM = (os.environ.get("MAIL_FROM") or SMTP_USER).strip()
 MAIL_FROM_NAME = os.environ.get("MAIL_FROM_NAME") or "JobMatch"
+# Overrides the name this client gives at EHLO and the right-hand side of the
+# Message-ID. Unset — the normal case — both come from the From: domain; see
+# `jobmatch.mail.domain`, which derives it rather than freezing it here, so a
+# MAIL_FROM changed after import cannot leave the two disagreeing.
+MAIL_DOMAIN = (os.environ.get("MAIL_DOMAIN") or "").strip()
 
 # Absolute base for the links in an email — `url_for` needs a request and a
 # digest is built by the worker, which has none. Unset means the digest links
@@ -228,11 +272,57 @@ DIGEST_INTERVAL_HOURS = _env_int("DIGEST_INTERVAL_HOURS", 24)
 DIGEST_MAX_JOBS = _env_int("DIGEST_MAX_JOBS", 10)
 
 # ── Web scraping ─────────────────────────────────────────────
+# How far back a scan is allowed to reach, in days, and the bounds the Crawl
+# panel offers. It is one number with three readers — the boards' own freshness
+# parameter, `sources.base.posted_cutoff`, and the Jobs page's Posted filter —
+# so the bounds live here rather than as `min`/`max` attributes on an input the
+# server never checked. There is **no "look all the way back"**: the window is
+# what sizes the enrich backlog, and an unbounded one (`scan_days = 0`) left
+# 4 478 rows waiting on a polite scraper — see MAX_DETAIL_FETCHES below. 30 is
+# also the widest Posted window the Jobs filter offers (`app.POSTED_WINDOWS`),
+# which is what keeps "30 days or newer" able to name the whole pool a scan
+# could have fetched.
+SCAN_DAYS_MIN = 1
+SCAN_DAYS_MAX = 30
+
+
+def scan_window(value):
+    """A stored `scan_days` as a usable window: an int inside the bounds.
+
+    Clamped rather than rejected, because this is the *read* side — the scan
+    runs off whatever the admin's row happens to hold, and a row written before
+    the bounds existed (or by hand) must still produce a crawl. A legacy 0 meant
+    "all the way back", so it reads as the widest window allowed, not as one day.
+    """
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return SCAN_DAYS_MAX
+    if days <= 0:
+        return SCAN_DAYS_MAX
+    return max(SCAN_DAYS_MIN, min(SCAN_DAYS_MAX, days))
+
+
 # Politeness delays between requests (seconds)
 MIN_PAGE_DELAY = 5.5        # between search-result pages
 MAX_PAGE_DELAY = 13.0
 MIN_DETAIL_DELAY = 8.0      # between job-detail fetches
 MAX_DETAIL_DELAY = 16.0
+
+# How many descriptions one scan will fetch before leaving the rest to the next
+# one. The enrich phase reads every row in the pool that still has no
+# description, not just the ones this scan found — a fetch can fail, and a later
+# scan retrying it is the only thing that ever fixes that. Unbounded, it is a
+# queue that a crawl can fill faster than a polite scraper can drain: a window
+# of `scan_days = 0` left 4 478 rows waiting, and at the delays above that is
+# fifteen hours of fetching, which is why scans 16, 17 and 18 each died part-way
+# through one. 300 is an hour at the average delay, against a 6-hourly schedule.
+#
+# The backlog is worked **newest first**, which is the half that matters more
+# than the ceiling: whatever a scan does get through is then the rows somebody
+# is about to read, and `CLAUDE.md`'s "shown unscored until the next scan"
+# already says an un-enriched row is a state the app is built to survive.
+MAX_DETAIL_FETCHES = _env_int("MAX_DETAIL_FETCHES", 300)
 
 # Playwright timeouts (milliseconds)
 TIMEOUT_GOTO = 45000
@@ -379,3 +469,128 @@ SEARCH_PROFILES = {
 }
 
 DEFAULT_SEARCH_PROFILE = "custom"
+
+# ── Role relevance (what the job title says the work is) ─────
+#
+# The scorer's fifth component reads the one field every posting has and every
+# human reads first. It exists because the other four could not tell a React
+# role from a "junior ESG consultant": a description that mentions Python once
+# gives skills 1.0, and the title — the thing that says what the job *is* —
+# was not read at all.
+#
+# Graded by how *specific* the match is, because a search term is tuned for
+# recall on a board and makes a poor precision signal on its own. The user's
+# own skills are the sharpest evidence, their discipline next, a bare dev-role
+# word weakest — "engineer" appears in "network security engineer" too.
+#
+# DISCIPLINES maps a canonical discipline to the words a title writes it with,
+# in the languages the Slovak and Czech boards use. A user's disciplines are
+# whichever of these their search terms name, so this is a vocabulary the app
+# knows, never a preference it holds — the preference stays in their settings.
+ROLE_DISCIPLINES = {
+    # Bare "front" is deliberately absent: on a title it finds "front office"
+    # and "front desk", and it floated an SPP contact-centre operator onto a
+    # frontend developer's list at 44. A user who *types* "front" still lands
+    # here, because `user_disciplines` matches a term against these words by
+    # prefix — the recall belongs on the search side, not on the title side.
+    "frontend": ["frontend", "front-end", "front end", "ui", "ux",
+                 "web", "webov"],
+    "backend": ["backend", "back-end", "back end", "api", "server"],
+    "fullstack": ["fullstack", "full-stack", "full stack"],
+    "mobile": ["mobile", "mobilny", "android", "ios", "native"],
+    "data": ["data", "datovy", "analytics", "machine learning", "ai"],
+    "devops": ["devops", "sre", "infrastructure", "platform", "cloud"],
+    "qa": ["qa", "tester", "testing", "quality assurance", "automation test"],
+}
+
+# A title that names one of these is at least *some* kind of engineering job,
+# which is worth more than a title that names none — and less than one that
+# names the discipline the user asked for. Diacritics are stripped before the
+# match, so "vývojár" is listed the way it is written and found either way.
+ROLE_GENERIC = [
+    "developer", "vyvojar", "programator", "programmer", "coder",
+    "engineer", "inzinier", "software", "architect", "it specialist",
+]
+
+# Professions that are not this one. "Engineer" and "inžinier" are in
+# ROLE_GENERIC because they are usually worth something on a job board — but in
+# Slovakia they are mostly a factory: a *logistics & packaging engineer*, a
+# *maintenance engineer (robotics)* at Volvo and a *junior procesný inžinier
+# výroby* each collected a generic hit and cleared a frontend developer's
+# threshold. A title naming one of these names work this person does not do.
+#
+# Tested *after* the skill and discipline rungs on purpose, which is what makes
+# a broad list safe: "frontend developer for a logistics platform" is matched
+# on its discipline and never reaches this vocabulary. Multi-word terms are
+# used wherever a single word is shared with software — "process engineer" and
+# not "process", and no bare "quality", because quality assurance is QA.
+ROLE_OTHER_FIELDS = [
+    # Plant, production and maintenance
+    "vyroby", "vyroba", "process engineer", "procesny inzinier", "maintenance",
+    "udrzby", "udrzba", "nastrojar", "mechanical engineer", "strojny inzinier",
+    "electrical engineer", "elektrotechnik", "body in white", "zvaranie",
+    "quality & process",
+    "technolog", "konstrukter", "operator vyroby",
+    # Logistics and supply
+    "logistics", "logistika", "packaging", "warehouse", "sklad", "supply chain",
+    "zasobovanie", "spedicia",
+    # Commercial, office and front desk
+    "sales", "obchodny", "obchodnik", "account manager", "marketing",
+    "recepcny", "receptionist", "kontaktneho centra", "contact centre",
+    "call centre", "call center", "operator", "operatorka", "predavac",
+    "accountant", "uctovnik", "payroll", "hr", "human resources", "recruiter",
+    "personalist", "insurance", "poistovaci", "advokat", "pravnik",
+    # Care, trade and transport
+    "zdravotn", "opatrovate", "kuchar", "vodic", "ridic", "skladnik",
+    "stavbyvedu", "murar", "elektrikar",
+]
+
+# Level words are the seniority component's job. Counting them here too is what
+# floated "junior ESG consultant" to the top of a frontend developer's list, so
+# they are removed from a user's search terms before any of the above is asked.
+ROLE_LEVEL_WORDS = {
+    "junior", "medior", "senior", "student", "graduate", "absolvent",
+    "internship", "intern", "staz", "trainee", "praxe", "prax", "entry",
+    "lead", "principal", "head",
+}
+
+# Words that, in a *title*, say the job sits above the person reading it. Only
+# ever matched against `jobs.title`, never the description: prose says "lead a
+# small team" and "a leading Slovak company" about jobs that are neither, while
+# a title states a level on purpose. Slovak spellings are listed as written and
+# found with diacritics stripped, the way the role vocabulary above is.
+ROLE_LEVEL_ABOVE = {
+    "medior": ["medior", "mid-level", "mid level"],
+    "senior": ["senior", "sr", "skuseny"],
+    "lead": ["lead", "team lead", "tech lead", "vedouci", "veduci", "hlavny"],
+    "principal": ["principal", "staff engineer", "expert"],
+    "architect": ["architect", "architekt"],
+    "head": ["head of", "manager", "manazer", "riaditel", "director"],
+}
+
+# A title naming a *range* keeps its lowest rung: "webový manažér (junior -
+# senior)" is a real opening for a junior, and cutting it because the word
+# senior appears would throw away an ad that invites them by name.
+
+# Slovak towns, for the one question `worktype` cannot answer on a board that
+# does not declare it. Profesia's work-mode column is read out of the ad's
+# prose, so "možnosť práce z domu" in an ad for an office on Bottova 2a stores
+# `remote` — a perk, not a work permit. When the place field names a town in
+# the user's own country that is not their town, that is a commute they cannot
+# make, and the place field is the deliberate one. Street addresses carry the
+# town too ("ševčenkova 34, petržalka"), so city districts are listed.
+SK_CITIES = [
+    "bratislava", "petrzalka", "ruzinov", "nove mesto", "karlova ves",
+    "kosice", "presov", "zilina", "nitra", "trnava", "banska bystrica",
+    "trencin", "martin", "poprad", "prievidza", "zvolen", "povazska bystrica",
+    "michalovce", "nove zamky", "spisska nova ves", "komarno", "levice",
+    "humenne", "bardejov", "liptovsky mikulas", "piestany", "ruzomberok",
+    "topolcany", "trebisov", "dubnica nad vahom", "vranov nad toplou",
+    "senec", "dunajska streda", "malacky", "pezinok", "sala", "rimavska sobota",
+]
+
+# How much of the job's detected skill list counts as enough evidence to trust
+# the coverage figure. A description that yielded one skill and matched it is
+# *not* the same fit as one that yielded five and matched five, and scoring
+# both 1.0 is what put 77 jobs at a perfect 100 with a single word between them.
+MIN_SKILL_EVIDENCE = 3

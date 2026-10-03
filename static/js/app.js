@@ -224,28 +224,38 @@ function modeFact(job) {
 }
 
 function placeFact(job) {
-  // An unplaced job still shows where the board said it was, rather than
-  // pretending we know less than we do. A posting hiring in several places
-  // reads "Europe +4" and carries the other four in its title — the words are
-  // the server's, like every other label on a card.
-  const text = job.country_label || job.location;
-  if (!text) return "";
+  // This chip answers *reach* — which country, and so whether you could take
+  // the job — and only that. It used to fall back to `job.location` when the
+  // row could not be placed, which printed the town a second time next to the
+  // grey line that already had it. An unplaced row shows no chip; its town is
+  // still in `jobMeta()`, so nothing is lost and nothing is said twice.
+  // A posting hiring in several places reads "Europe +4" and carries the other
+  // four in its title — the words are the server's, like every other label.
+  if (!job.country_label) return "";
   const title = job.country_title ? ` title="${esc(job.country_title)}"` : "";
-  return `<span class="keyfact place${job.country_label ? "" : " none"}"${title}>${esc(text)}</span>`;
+  return `<span class="keyfact place"${title}>${esc(job.country_label)}</span>`;
 }
 
 function keyFacts(job) {
   return `<div class="keyfacts">${payFact(job)}${modeFact(job)}${placeFact(job)}</div>`;
 }
 
-function factTags(job) {
+function factTags(job, { full = false } = {}) {
   // Labels come from the API (jobmatch/display.py) so every page words them
   // the same way — "Mid-level", never "medior". Worktype is deliberately not
   // repeated here; it is a key fact and lives in the row above.
+  //
+  // Employment type only earns a chip in a *list* when it is news. Four in five
+  // of the postings that state one say "Full-time", which is what a reader
+  // already assumes, so on a card the chip was mostly noise. The detail page
+  // passes `full` and shows it either way: there, one more fact about the one
+  // job you are reading is the point.
+  const employment = job.employment_label
+    && (full || job.employment_type !== "fulltime");
   return [
     `<span class="tag src">${esc(job.source_label)}</span>`,
     job.seniority_label ? `<span class="tag fact">${esc(job.seniority_label)}</span>` : "",
-    job.employment_label ? `<span class="tag fact">${esc(job.employment_label)}</span>` : "",
+    employment ? `<span class="tag fact">${esc(job.employment_label)}</span>` : "",
   ].join("");
 }
 
@@ -256,37 +266,42 @@ function factTags(job) {
    does, so "not known" has to look different from "scored zero" — a hatched
    track, never an empty one. */
 
-const SCORE_PARTS = [
-  ["skills", "Skills"],
-  ["worktype", "Worktype"],
-  ["location", "Location"],
-  ["seniority", "Seniority"],
-];
+/* The components and their words come from `display.SCORE_COMPONENTS` through
+   `base.html`. They used to be written out here as well as in the Settings
+   sliders and in the landing page's prose, which is how the landing page ended
+   up a whole component behind. */
+const SCORE_PARTS = window.SCORE_COMPONENTS || [];
 
 function hasBreakdown(bd) {
-  return !!bd && SCORE_PARTS.some(([key]) => key in bd);
+  return !!bd && SCORE_PARTS.some(({ key }) => key in bd);
 }
 
-function miniBars(bd) {
-  // Decorative: the same four numbers are readable as text in the panel below,
-  // so a screen reader is told to skip the duplicate.
-  if (!hasBreakdown(bd)) return "";
-  return `<div class="minibars" aria-hidden="true">` + SCORE_PARTS.map(([key]) => {
-    const value = bd[key];
-    return value === null || value === undefined
-      ? `<span class="minibar unknown"></span>`
-      : `<span class="minibar"><i style="width:${Math.round(value * 100)}%"></i></span>`;
-  }).join("") + `</div>`;
-}
+/* There were minibars here: five 3px slivers beside every score, drawing the
+   same five numbers the panel below spells out in words. They were
+   `aria-hidden` by their own admission — decoration — and on a 25-row page that
+   is 125 of them. The score is one number until you ask for the five, which is
+   what the button and `s` have always been for.
 
-function breakdownPanel(bd) {
+   This does not touch the hatched-bar invariant: an unknown component is still
+   drawn hatched rather than empty, in `breakdownPanel` below, on both surfaces
+   that draw a component. */
+
+function breakdownPanel(bd, { ineligibleLabel = "" } = {}) {
   if (!hasBreakdown(bd)) {
     return `<p class="hint">Not scored yet — the next scan will fetch the description.</p>`;
   }
+  // A cut job scores 0 and was never averaged, so the sentence below it would
+  // be a lie. Say which rule removed it instead, and leave the bars: what the
+  // job looked like is still the honest answer to "why is this not on my list".
+  const cut = ineligibleLabel
+    ? `<p class="hint"><strong>${esc(ineligibleLabel)}.</strong> This one is off
+         your list, so it scores zero whatever the parts below say. Turn off
+         “Only jobs I can take” in Settings to rank it instead.</p>`
+    : `<p class="hint">The score is the average of what is <em>known</em> about this job,
+       weighted by what you said matters. Anything unknown is left out, not counted as zero.</p>`;
   return `
-    <p class="hint">The score is the average of what is <em>known</em> about this job,
-       weighted by what you said matters. Anything unknown is left out, not counted as zero.</p>
-    <dl class="breakdown-list">` + SCORE_PARTS.map(([key, name]) => {
+    ${cut}
+    <dl class="breakdown-list">` + SCORE_PARTS.map(({ key, label: name }) => {
     const value = bd[key];
     const unknown = value === null || value === undefined;
     return `
@@ -317,18 +332,25 @@ function jobActions(job) {
   return `<button class="btn small ghost" data-act="new">Un-apply</button>`;
 }
 
+const CARD_SKILLS = 4;   // how many skill pills a row shows before counting
+
 function jobCard(job, { actions = true, skills = true } = {}) {
-  const skillTags = skills
-    ? (job.skills || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 8)
-        .map(s => `<span class="tag">${esc(s)}</span>`).join("")
-    : "";
+  // Eight pills was a second grey paragraph per row and 200 of them on a page.
+  // Four plus a count keeps the shape of the answer — "it names things you
+  // have, and more than fit" — and the whole list is one Enter away, on the
+  // detail page's own "Skills found in this posting" panel.
+  const found = skills
+    ? (job.skills || "").split(",").map(s => s.trim()).filter(Boolean) : [];
+  const extra = found.length - CARD_SKILLS;
+  const skillTags = found.slice(0, CARD_SKILLS)
+      .map(s => `<span class="tag">${esc(s)}</span>`).join("")
+    + (extra > 0 ? `<span class="tag more">+${extra}</span>` : "");
   return `
     <article class="job" data-id="${job.id}" tabindex="-1">
       <div class="score-cell">
         <button type="button" class="score ${scoreClass(job.match_score)}"
                 aria-expanded="false" aria-controls="bd-${job.id}"
                 aria-label="${esc(scoreLabel(job))}">${scoreText(job.match_score)}</button>
-        ${miniBars(job.score_breakdown)}
       </div>
       <div class="job-main">
         <a class="title" href="/jobs/${job.id}">${esc(job.title)}</a>
@@ -339,7 +361,8 @@ function jobCard(job, { actions = true, skills = true } = {}) {
         <div class="tags">${factTags(job)}${skillTags}</div>
       </div>
       ${actions ? `<div class="actions">${jobActions(job)}</div>` : ""}
-      <div class="breakdown" id="bd-${job.id}" hidden>${breakdownPanel(job.score_breakdown)}</div>
+      <div class="breakdown" id="bd-${job.id}" hidden>${
+        breakdownPanel(job.score_breakdown, { ineligibleLabel: job.ineligible_label })}</div>
     </article>`;
 }
 

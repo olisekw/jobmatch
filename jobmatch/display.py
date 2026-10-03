@@ -24,6 +24,10 @@ EMPLOYMENT_TYPE = {
     "internship": "Internship",
 }
 JOB_STATUS = {"new": "New", "applied": "Applied", "declined": "Declined"}
+# What the Jobs list can be ordered by. The keys are `db.JOB_ORDER`'s — the SQL
+# lives there and the words live here, like every other stored value — and a test
+# holds the two sets equal so a new ordering cannot ship without a name.
+JOB_SORT = {"score": "Best match", "date": "Newest", "pay": "Best pay"}
 APPLICATION_STATUS = {
     "applied": "Applied",
     "interview": "Interview",
@@ -61,11 +65,38 @@ SEARCH_PROFILE = {
     "devops": "DevOps",
     "custom": "Custom",
 }
+# The five score components, in the order every chart of them is drawn. This is
+# the one place their names are written: the Settings sliders, the breakdown bars
+# on a card and on the detail page, and the weight-validation messages below all
+# read it. They used to be spelled out in four places, and the landing page had
+# already drifted a whole component behind.
+SCORE_COMPONENTS = {
+    "role": "Role",
+    "skills": "Skills",
+    "worktype": "Worktype",
+    "location": "Location",
+    "seniority": "Seniority",
+}
+# Why a job was cut rather than ranked — `scoring.INELIGIBLE_*`. Written as
+# the reason the reader is owed, not as the rule's name: the score on a cut job
+# is 0, and a panel explaining that a score is "the average of what is known"
+# is a lie about a job that was never averaged.
+INELIGIBLE = {
+    "field": "Not your trade — the title names work you did not ask for",
+    "level": "Above your level — the title asks for someone more senior",
+    "reach": "Out of reach — on-site somewhere you cannot get to",
+}
+
+# Which stored setting weights each component. `skills` is the one irregular
+# pair — `weight_skill`, singular — and it is spelled that way in every row
+# already written, so it is mapped rather than derived from the component name.
+COMPONENT_WEIGHT = {
+    key: "weight_skill" if key == "skills" else f"weight_{key}"
+    for key in SCORE_COMPONENTS
+}
 WEIGHT = {
-    "weight_skill": "The skills weight",
-    "weight_worktype": "The worktype weight",
-    "weight_location": "The location weight",
-    "weight_seniority": "The seniority weight",
+    COMPONENT_WEIGHT[key]: f"The {text.lower()} weight"
+    for key, text in SCORE_COMPONENTS.items()
 }
 
 
@@ -83,6 +114,21 @@ def label(mapping, value):
 def options(mapping):
     """A mapping as [{value, label}], for building a <select> on the client."""
     return [{"value": value, "label": text} for value, text in mapping.items()]
+
+
+def score_components():
+    """`SCORE_COMPONENTS` as JSON the pages can draw bars and sliders from.
+
+    Carries the weight key alongside the label so a page can pair a slider with
+    the setting it writes without knowing that `skills` is weighted by
+    `weight_skill`. Order is display order, and it is a server fact: the bars on
+    a card, the bars on the detail page and the sliders in Settings all draw the
+    five in the same sequence because they all read this list.
+    """
+    return [
+        {"key": key, "weight_key": COMPONENT_WEIGHT[key], "label": text}
+        for key, text in SCORE_COMPONENTS.items()
+    ]
 
 
 def application_groups():
@@ -125,8 +171,16 @@ def _absolute(day, today):
     return stamp if day.year == today.year else f"{stamp} {day.year}"
 
 
+# How old a posting may be and still be described in days rather than by its
+# date. A month, because on a job board the age *is* the fact: "8 days ago"
+# answers "is this still open?" and "last week" — which is what 8 days used to
+# read as — throws away the digit that answers it. Past a month the day count
+# stops being actionable and the date is the shorter sentence.
+DAYS_AGO_LIMIT = 31
+
+
 def relative_date(iso, today=None):
-    """Day-granularity age: 'today', '3 days ago', 'last week', '12 Aug'."""
+    """Day-granularity age: 'today', '3 days ago', '8 days ago', '12 Aug'."""
     parsed = parse(iso)
     if parsed is None:
         return ""
@@ -139,10 +193,8 @@ def relative_date(iso, today=None):
         return "today"
     if delta == 1:
         return "yesterday"
-    if delta < 7:
+    if delta <= DAYS_AGO_LIMIT:
         return f"{delta} days ago"
-    if delta < 14:
-        return "last week"
     return _absolute(day, today)
 
 

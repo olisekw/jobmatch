@@ -45,9 +45,16 @@ def due_for_scan(conn, now=None):
     """True if the schedule says it is time for another crawl."""
     if not config.SCAN_ENABLED or config.SCAN_INTERVAL_HOURS <= 0:
         return False
-    # Nothing to scan *for* yet: a fresh instance with no account has no search
-    # settings either, and the crawl runs off the admin's.
-    if db.admin_user_id(conn) is None:
+    # Nothing to scan *for* yet: a fresh instance with no owner has no search
+    # settings either, and the crawl runs off the admin's. Asked as `has_admin`
+    # rather than `admin_user_id is None`, because that one falls back to the
+    # first account and on a demo-enabled box the first account is the demo,
+    # created by this very worker seconds into the first boot — which is how a
+    # real first boot came to crawl the boards on the demo persona's terms,
+    # before the admin `setpassword` creates existed. The demo is never an
+    # admin precisely so it cannot trigger the shared crawl; the schedule has
+    # to honour that too, not just the button.
+    if not db.has_admin(conn):
         return False
     last = conn.scalar("SELECT MAX(started_at) FROM scans")
     if last is None:
@@ -106,6 +113,11 @@ def maybe_send_digests(conn):
 def run(poll_seconds=None, once=False):
     """The worker loop. `once` does a single pass, which is what tests want."""
     poll = poll_seconds if poll_seconds is not None else config.WORKER_POLL_SECONDS
+    if config.DOTENV_IGNORED:
+        # Said here too, not only in the web tier: this is the process `.env`
+        # configures most — the scan interval, the SMTP host the digest needs,
+        # the demo reset — and it is the one that runs for days unattended.
+        log.warning("%s", config.DOTENV_IGNORED_MESSAGE)
     with db.get_conn() as conn:
         # The worker may well be the first process to reach a fresh database.
         db.init_schema(conn)

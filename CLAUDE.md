@@ -83,6 +83,62 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
   seniority/worktype are **not** punished for missing data. Jobs with no fetched description are
   shown unscored until the next scan. The UI says so too: an unknown component is a *hatched*
   bar, never an empty one, because an empty bar reads as a zero.
+- **The title is a component, because the other four cannot tell what the job *is*.** `role`
+  reads `jobs.title` and is the one component known for every scored job — every posting has a
+  title. It is graded, not binary: a technology the user has (1.0) outranks the discipline they
+  searched for (0.7) outranks a bare engineering word (0.35), because a search term is written
+  for recall on a board and makes a poor precision signal alone. **Level words are stripped
+  first** (`config.ROLE_LEVEL_WORDS`) — "junior" is the seniority component's word, and counting
+  it twice is what put a *junior ESG consultant* at 100 on a frontend developer's list. A miss
+  is a real `0.0`, not `None`: a title naming work you did not ask for is an answer, not missing
+  data. Match role words at word boundaries with a small allowance for Slovak/Czech case endings
+  ("webových"), never as substrings — `js` is a skill and lives inside `jsou`.
+- **Eligibility is not a score, and `strict_match` is what makes it a cut.** A score ranks jobs
+  you could take; `scoring.ineligible` answers a different question — whether you could take it
+  at all — and three answers are non-answers rather than weak ones: the title names **another
+  trade**, it names a **level above you**, or the job is **somewhere you cannot get to**. Weights
+  could never have expressed this: 96 of 245 fresh Profesia postings — a receptionist, a
+  toolmaker, a junior project manager — sat at *exactly* 37.6 on a frontend developer's list,
+  above his threshold, because the four job-side components cannot tell what a job is. Each test
+  refuses to fire on missing data, so a thin row is still ranked and never hidden. The reason is
+  stored in the breakdown beside the components, so the detail page can say which rule fired —
+  and `display.INELIGIBLE` owns that sentence, because a 0 with the usual "average of what is
+  known" caption is a lie about a job that was never averaged. Off by default: it throws jobs
+  away, and that has to be asked for.
+- **A level is read off the title, and a range keeps its lowest rung.** `jobs.seniority` stops at
+  senior and is extracted from prose that says "lead a small team" and "a leading Slovak company"
+  about jobs that are neither; a *title* states a level deliberately, and the rungs that matter
+  most to a junior — lead, architect, head of — are ones that column has no word for. So
+  `scoring.level_floor` reads `config.ROLE_LEVEL_ABOVE` against the title only, and takes the
+  **minimum** of what it finds: "webový manažér (junior - senior)" invites a junior by name, and
+  reading only the highest word would cut an ad addressed to them.
+- **The place field outranks the prose about it.** On a board that does not declare `worktype`
+  (Profesia declares nothing), that column was read out of the description — so "možnosť práce z
+  domu" in an ad for an office on Bottova 2a stores `remote`, and a perk is not a work permit.
+  `scoring._reachable` therefore asks the place field first: a town in the user's own country
+  that is not their town settles it, whatever the prose claimed. Only once no such town is named
+  does `worktype` get asked, and then the question is reach rather than distance, over the same
+  `places.reachable_codes()` the filter uses. `config.SK_CITIES` is that town list, districts
+  included, because a Profesia place field carries a street address.
+- **The role ladder's fourth rung is other people's professions.** `ROLE_GENERIC` holds
+  "engineer" and "inžinier" because on a job board they usually mean something — and in Slovakia
+  they are mostly a factory. `config.ROLE_OTHER_FIELDS` is tested **after** the skill and
+  discipline rungs and before the generic one, which is exactly what makes a broad list safe:
+  "frontend developer for a logistics platform" is matched on its discipline and never reaches
+  the vocabulary. Single words shared with software are spelled as phrases — "process engineer",
+  never "process", and no bare "quality", because quality assurance is QA. For the same reason
+  bare "front" is **not** one of the frontend discipline's words: on a title it finds "front
+  office", and the user who types it still reaches the discipline by prefix.
+- **A list with no board asked for shows the boards the instance uses — the admin's.**
+  `enabled_sources` is one of `db.SCAN_SETTING_KEYS`: the crawl is shared and so is the board
+  list it honours. Switching the crawl to Profesia alone left 8 000 rows from six disabled boards
+  in "To review", a backlog no scan will ever refresh. Reading the *viewer's* copy instead is the
+  trap — a second account keeps the seven defaults it never chose, and a pool scraped from a
+  board outside that set goes invisible to everyone but the admin.
+- **Skills coverage has a floor under its denominator** (`config.MIN_SKILL_EVIDENCE`). Extraction
+  finds one skill in ~12% of described jobs and none in ~41%, so plain `overlap/len(job_skills)`
+  most often scored a single word a perfect 1.0 — 77 jobs tied at 100 in the live pool. Thin
+  evidence still ranks; it just cannot top the list on its own. Above the floor it is unchanged.
 - **"Matched" is always derived** (`score ≥ threshold` and status `new`), never stored — changing
   weights/threshold in Settings re-scores instantly and throws nothing away.
 - **A source's structured fields beat regex extraction** — if a board's API gives `posted_at`,
@@ -95,14 +151,28 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
 - **Adding a board = one file** in `jobmatch/sources/` implementing `search(page, terms, days,
   known_ids, ctx)` (+ `fetch_detail()` if listings lack descriptions) + a registry entry. Set
   `needs_browser = True` only if the site requires Playwright.
+- **`ctx.seen()` counts listings the parser could *read*, never containers it found.** It is the
+  silent-board alarm's only evidence, and a count taken off the card container is a number that
+  cannot go wrong — so the alarm cannot fire. Kariéra counted `div.offer` and, measured against
+  the live board, four realistic redesigns (the title heading renamed, its `h2` changed, the
+  offer URL reshaped, the id dropped from it) each left six cards standing while the parser
+  produced nothing. Count after the title, the link and the id have been extracted, as all three
+  HTML adapters now do. **Pagination asks a different number** — the rows the board served,
+  promoted slots included — because a full page this parser only partly understands is still a
+  full page, and stopping on it truncates the crawl.
 - **Migrations are additive and idempotent** (`backfill.py`) — never touch a user's statuses/scores.
   `init_schema` can add a column but not change a CHECK constraint; anything that alters one
   needs a table rebuild in `backfill.py` (see `migrate_scan_queue`) and a check at boot.
 - **Scanning lives in the worker, and `scans` is the queue.** No scan state in module globals:
   a status poll must be answerable by a process that is not scanning. Triggering is admin-only
   and the crawl is global — one scrape serves every user, or the boards ban us.
-  The crawl's terms, boards and window are the **admin's** settings; *where* is the one thing
-  that is not, because their answer is not the other accounts'. `db.crawl_regions` is the
+  The crawl's terms, boards and window are the **admin's** settings — and `admin_user_id` is
+  "the lowest-id admin", so **which** admin is a question the `users` table can answer wrongly:
+  the pre-Phase-3 `local@jobmatch.local` row has no password hash, cannot be signed in as, and
+  owned the live crawl for seven weeks while the real owner's board list was read by nothing.
+  An account nobody can log into cannot own the instance (`backfill.demote_ghost_admin`), and
+  never the last admin, because an unowned instance stops scanning. *Where* is the one thing
+  that is not the admin's, because their answer is not the other accounts'. `db.crawl_regions` is the
   union of every account's reach, handed to adapters as `ctx.regions`, and **one user nobody
   can place empties it** — a narrowed crawl never fetches what it did not ask for, and the
   shared pool is the only place a score can come from. Narrowing may only ever be an
@@ -119,6 +189,16 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
   the email and the Jobs page must never disagree about what counts. The run is stamped
   *before* the send (a dead relay costs one cycle, not a retry every poll) and the jobs only
   after it, so a failed send loses nothing and everything arrives next time.
+- **A message carries its own `Date` and `Message-ID`, and leaves 7-bit clean.** Neither
+  `EmailMessage` nor `smtplib` writes either header, and most relays quietly add them — which
+  is why sending without them survived Phase 8 unnoticed, and why it is not a thing to rely
+  on: `Date` is mandatory in RFC 5322 and a missing `Message-ID` is on Gmail's own list for
+  bulk senders. The bodies are `quoted-printable` for the same reason in reverse: the default
+  `8bit` put raw UTF-8 on the wire under an envelope that never said `BODY=8BITMIME`
+  (`smtplib` only adds it for a non-ASCII *address*), and on these boards half the titles
+  carry an á. The envelope sender is `MAIL_FROM` and so is `From:` — that alignment is what
+  DMARC asks about after SPF passes — and the EHLO name is that domain too, never the
+  container's dotless hostname, which `smtplib` turns into a bare `[172.18.0.4]`.
 
 - **Words for stored values live server-side, and so do groupings of them.** `display.py`
   owns every label; `display.APPLICATION_GROUPS` owns the tracker's tabs (which is why
@@ -147,9 +227,26 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
   `places.reachable_codes()` the scorer uses, so the list and the score cannot disagree about
   where you can work), pay is `salary.HOURLY_EUR_SQL` over the structured salary columns — the
   same conversion the card prints, generated from `salary.HOURS_PER` *and* `salary.EUR_RATES`
-  so the number you filter on and the number you read cannot drift. A filter value the server
-  does not recognise is ignored rather than obeyed, so a hand-edited query string cannot empty
-  the list.
+  so the number you filter on and the number you read cannot drift, and age is `jobs.posted_at`
+  against `sources.base.posted_cutoff` — the *crawl's* own window function, so "7 days or newer"
+  in the Jobs filter selects exactly what a `scan_days = 7` scan was allowed to fetch instead of
+  meaning the same word a day differently. A filter value the server does not recognise is
+  ignored rather than obeyed, so a hand-edited query string cannot empty the list.
+- **A posting's age is derived from a stored date, never stored as an age.** `jobs.posted_at` is
+  the absolute date a board's freshness string resolved to at scrape time (`dates.parse_posted`,
+  which is why it takes a reference date); every age above it — `dates.days_ago`,
+  `display.relative_date`, the Posted filter — subtracts from **today**, per request. That is
+  the whole reason one stored row is right on every later day: a posting the board called
+  "pred 4 dňami" on 3 Oct is stored as 29 Sep and reads *8 days ago* on 7 Oct. Storing the
+  board's words, or a day count, would have pinned every row to the scan that found it and made
+  a cumulative pool read as though it were all scraped this morning. The raw `freshness` text is
+  kept for `backfill.py` to re-parse and is deliberately never shown. Two corollaries: an age is
+  printed **in days for a month** (`display.DAYS_AGO_LIMIT`) because on a job board the digit is
+  the fact — "last week" was what 8 days used to read as, and it threw that digit away — and a
+  row whose date would not parse is `NULL`, so it is out of every freshness window rather than
+  claiming the day of the scan. The sorts coalesce to `scraped_at` and the *filter must not*:
+  when we saw a posting is not when it went up, and a three-year-old ad found this morning would
+  otherwise top a freshness filter.
 - **Comparing two salaries takes one period and one currency.** A board's amount, currency and
   period are stored exactly as written and `salary.range_display` reads them back that way;
   the comparison is derived on the way out, in euros an hour, by `salary.hourly_eur()` and its
@@ -162,21 +259,51 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
 
 ## Conventions & safety
 
+- **The web tier is one process, and the rate limits are why.** `RATELIMIT_STORAGE_URI`
+  defaults to `memory://`, which is one bucket *per process* — the image shipped `--workers 2`
+  and `/login`'s `10 per minute` let 20 through, non-deterministically, since which worker
+  answered decided whether a request counted. Phase 4's "several workers are safe" was an
+  argument about *scan state* (it lives in the `scans` row) and said nothing about limiter
+  buckets. So: concurrency is `--threads` inside one process — the count chosen against
+  SQLAlchemy's `pool_size=5 + max_overflow=10`, not the CPU count, because every request
+  holds exactly one `g.db` connection for its life — and the process count lives in
+  `WEB_CONCURRENCY` rather than in a `CMD` flag, precisely so `check_runtime_config` can
+  **refuse** it above 1 against an in-memory store. Threads make module-level mutable state a
+  live question: `db._ENGINES` is locked (two engines means two pools), `auth._DUMMY_HASH`
+  races harmlessly on purpose, and `app._deployed` / `obs._configured` are boot-path only.
 - **Multi-user as of Phase 3**: argon2id + Flask-Login sessions, CSRF on every mutating route,
   rate limits on the credential endpoints. Every route is behind `@login_required` and every
   query is scoped by `current_user_id()` — adding a route means doing both. The two deliberate
   exceptions are `/` (the landing page, which branches on `current_user.is_authenticated`) and
   `/healthz`; both are public on purpose and neither reads a user's data. The job pool in
   `jobs` is the one thing that is deliberately shared.
+- **A config file that is read by nobody is a config file that lies.** `config.py` catches
+  python-dotenv's ImportError so a missing convenience dependency cannot break startup — but
+  "not fatal" is not "silent": with the package absent from the interpreter that actually ran
+  this instance, a fully populated `.env` configured *nothing*, and the app served for weeks on
+  the dev `SECRET_KEY` while the file set a real one. `config.DOTENV_IGNORED` is checked
+  **first** in `check_runtime_config`, ahead of the SECRET_KEY and debug refusals, because those
+  read the very values that are not arriving. Refused on a deployment, warned about on a laptop,
+  and logged by the worker too — it is the process `.env` configures most.
 - **It expects to be deployed.** `SECRET_KEY` must come from the environment; startup refuses
   the dev key or debug mode on anything but a loopback bind, and `wsgi.py` calls
   `app.mark_deployed()` because gunicorn binds with `--bind` and never reads `HOST`.
   Put it behind the bundled Caddy for TLS — see `DEPLOY.md`.
 - **The demo account is a real account with three holes punched in it**: no CV upload, no
-  self-deletion, and never an admin (which is what stops it triggering a scan). It is
-  identified by email against `config.DEMO_EMAIL`, so `users` needs no column for it, and
-  it is deliberately *not* read-only — the nightly reset is what makes that safe.
+  self-deletion, and never an admin (which is what stops it triggering a scan — the *schedule*
+  has to honour that too, so `due_for_scan` asks `db.has_admin`, not "is there a user": a
+  demo-enabled box's first account is the demo, and asking the second question crawled the
+  boards on its settings ten seconds into the first boot). It is identified by email against
+  `config.DEMO_EMAIL`, so `users` needs no column for it, and it is deliberately *not*
+  read-only — the nightly reset is what makes that safe.
 - Scrapers keep **polite delays** (5–16s between page requests on Slovak boards); don't remove them.
   API boards are fast; the default incremental scan window (last 7 days) keeps runs quick.
+  **Fast is not the same as free, and one board says so in its own payload:** Remotive's
+  `0-legal-notice` asks for "max. 4 times a day … excessive requests will be blocked", so its
+  whole feed is read **once per scan** and the terms filter in Python — asking per term made 19
+  requests a scan, 76 a day, for the same 18 jobs each time. A board that answers every query
+  with its entire feed (confirmed twice live: `search`, `category`, `limit` and the bare URL all
+  return the same ids, and `total-job-count` agrees) can only be read once; Remote OK was always
+  this shape, Remotive became it.
 - The DB is the source of truth and git-ignored — back it up if the tracker history matters.
 - Don't commit to `main` — branch first. Commit/push only when asked.

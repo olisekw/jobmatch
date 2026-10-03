@@ -5,13 +5,18 @@
 <h1>Dashboard</h1>
 <p class="subtitle">Your job search at a glance.</p>
 
+{# Three tiles, not five. "Worth a look" and "Still to review" were the same
+   question at two thresholds — reading 2 327 and 9 763 side by side is what
+   made this page hard to act on — and "Jobs collected" is a number with nothing
+   to do about it, so it moved into the sentence under the unscored count where
+   it is the denominator. The first two link to the pages that own them. #}
 <div class="stat-grid" id="stats">
-  <div class="stat invert"><div class="value" id="st-matched">–</div><div class="label">Worth a look</div></div>
-  <div class="stat"><div class="value" id="st-new">–</div><div class="label">Still to review</div></div>
-  <div class="stat"><div class="value" id="st-applied">–</div><div class="label">Applied</div></div>
-  <div class="stat"><div class="value" id="st-total">–</div><div class="label">Jobs collected</div></div>
+  <a class="stat invert" href="/jobs"><div class="value" id="st-matched">–</div><div class="label">To review</div></a>
+  <a class="stat" href="/tracker"><div class="value" id="st-applied">–</div><div class="label">Applied</div></a>
   <div class="stat"><div class="value" id="st-unscored">–</div><div class="label">Not scored yet</div></div>
 </div>
+{# 56% of the pool has no description, and nothing on any page said so. #}
+<p class="hint" id="unscored-note"></p>
 
 <div class="panel">
   <div style="display:flex; align-items:center; gap:1.5rem; flex-wrap:wrap;">
@@ -24,14 +29,16 @@
       {% if scan_interval_hours %}
         <div class="hint">The job boards are scanned for everyone every {{ scan_interval_hours }} hours.</div>
       {% endif %}
-      <div class="hint" id="scan-hint"></div>
     </div>
   </div>
 </div>
 
 <h2>Best matches right now</h2>
 <div id="top-jobs"></div>
-<p class="mt"><a href="/jobs">See all your matches →</a></p>
+{# A deep link, not a second copy of the nav's "Jobs": the Jobs page reads its
+   filters out of the query string now, so this opens the same list these five
+   cards are the top of. #}
+<p class="mt"><a href="/jobs?status=new&amp;sort=score">See all your matches →</a></p>
 
 {% endblock %}
 {% block scripts %}
@@ -56,22 +63,24 @@ async function loadDashboard() {
 
 function renderStats(s) {
   document.getElementById("st-matched").textContent = s.matched;
-  document.getElementById("st-new").textContent = s.new_jobs;
   document.getElementById("st-applied").textContent = s.applied;
-  document.getElementById("st-total").textContent = s.total_jobs;
   document.getElementById("st-unscored").textContent = s.unscored;
-  document.getElementById("scan-hint").textContent =
-    `A job counts as matched once it scores ${Math.round(s.threshold)}% or more `
-    + `and you haven't triaged it yet. Change the bar in Settings.`;
+  // The one thing no page explained: over half the pool has no description, so
+  // it is deliberately unscored rather than scored badly.
+  document.getElementById("unscored-note").textContent = s.unscored
+    ? `${s.unscored} of the ${s.total_jobs} jobs collected have no description yet — `
+      + `the next scan fetches them, and they stay unscored until it does.`
+    : "";
 
   const scan = s.last_scan;
   if (!scan) return;
 
   const line = document.getElementById("last-scan");
-  if (scan.status === "running") {
-    line.textContent = "Scanning right now…";
-  } else if (scan.status === "queued") {
-    line.textContent = "A scan is queued — the worker will pick it up shortly.";
+  // While a scan is live the strip under the nav is already saying so, in more
+  // detail and with the cancel button. Two places reporting one scan is how
+  // this panel came to have four stacked lines.
+  if (scan.status === "running" || scan.status === "queued") {
+    line.textContent = "";
   } else if (scan.status === "done" || scan.status === "cancelled") {
     line.textContent =
       `Last scan ${scan.when} · ${plural(scan.found, "new job")}, ${scan.enriched} analyzed`;

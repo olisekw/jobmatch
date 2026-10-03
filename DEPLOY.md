@@ -8,7 +8,7 @@ Four containers behind Caddy on one small box:
         :443
           │
      ┌────▼────┐      ┌──────────┐
-     │  caddy  ├─────►│   web    │  gunicorn, 2 workers, never scrapes
+     │  caddy  ├─────►│   web    │  gunicorn, 1 process / 8 threads, never scrapes
      └─────────┘      └────┬─────┘
                            │
      ┌─────────┐      ┌────▼─────┐
@@ -28,9 +28,18 @@ changes.
 
 **One worker, always.** The crawl is shared by every user by design (see
 `ROADMAP.md`), and the politeness delays only mean anything if a single process
-is doing the scraping. Never `docker compose up --scale worker=2`. `web` can be
-scaled freely — as of Phase 4 scan state lives in the `scans` row, so any web
-process can answer a status poll.
+is doing the scraping. Never `docker compose up --scale worker=2`.
+
+**And one `web` process too, for a different reason.** Phase 4 said `web` scaled
+freely, because scan state lives in the `scans` row and any process can answer a
+status poll. True, and not the whole question: `RATELIMIT_STORAGE_URI` defaults
+to `memory://`, which is one bucket *per process*, so two workers turned
+`/login`'s `10 per minute` into 20 — and into a limit that depended on which
+worker answered. The image therefore runs `--threads 8` inside one process,
+which keeps a slow request from blocking the next one without splitting the
+bucket. Raising `WEB_CONCURRENCY` above 1 while the store is still in memory is
+**refused at boot**, and `docker compose up --wait` exits 1: point
+`RATELIMIT_STORAGE_URI` at a shared store first.
 
 ---
 
@@ -39,6 +48,31 @@ process can answer a status poll.
 A Hetzner CX22 (2 vCPU / 4 GB, ~€4/mo) in an EU datacenter is the sizing this
 was built for: the Playwright image and one Chromium fit, with room for
 Postgres.
+
+**The free alternative is an ARM box, and everything below still applies.** An
+Oracle Cloud Always Free **Ampere A1** instance (2 OCPU / 12 GB since Oracle
+halved the allowance on 2026-06-15, plus 200 GB of block storage) in Frankfurt
+or Amsterdam is more box than the CX22 and costs nothing. It is `aarch64`, which
+is fine: the Playwright base image publishes a `linux/arm64` manifest carrying an
+**AArch64** Chromium at the exact revision `PLAYWRIGHT_VERSION` pins, and every
+compiled dependency has an aarch64 wheel. `deploy.yml` builds on the box, so the
+architecture is whatever the box is and nothing cross-builds — which is why CI's
+`image` job builds *both* architectures, so a Dockerfile that only works on amd64 is
+a red check rather than a failed first deploy. Three things bite only here:
+
+- **Open the ports twice.** Oracle's Ubuntu images ship a default-REJECT iptables
+  ruleset *in addition to* the VCN security list. A security-list rule alone
+  leaves 80/443 silently dead — the packet arrives and the box refuses it, which
+  looks exactly like a DNS mistake. `ufw` above replaces the ruleset; confirm
+  from off the network, not from the box.
+- **Idle instances get reclaimed.** Oracle takes back an Always Free instance
+  when 95th-percentile CPU *and* network *and* memory all sit under 20 % across a
+  rolling 7-day window. JobMatch at rest is under all three. Upgrading the
+  tenancy to Pay As You Go exempts it and keeps the Always Free resources free,
+  but it puts a card on file — decide before provisioning.
+- **The first build is slow.** The base image's browser layer is 832 MB
+  compressed with no warm cache on a fresh instance. A long first
+  `docker compose up --build` is that download, not a hang.
 
 ```bash
 # As root on a fresh Ubuntu 24.04:
@@ -54,7 +88,8 @@ ufw default deny incoming && ufw default allow outgoing
 ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 443/udp
 ufw --force enable
 
-apt update && apt install -y unattended-upgrades fail2ban
+# rclone is for the off-box backups in §5; on an ssh target, rsync instead.
+apt update && apt install -y unattended-upgrades fail2ban rclone
 dpkg-reconfigure -plow unattended-upgrades
 
 # Docker, from Docker's own repository (Ubuntu's is older).
@@ -90,6 +125,7 @@ Fill in `.env` — every other value has a working default:
 | `JOBMATCH_DEBUG` | `false`. Startup refuses debug on a non-loopback bind. |
 | `ALLOW_SIGNUP` | `false` closes the door without a code change. |
 | `TRUSTED_PROXY_HOPS` | `1` for the Caddy in front. Too high lets a caller forge their own IP past the rate limits. |
+| `WEB_CONCURRENCY` | `1`. gunicorn's own name for the process count; concurrency is `--threads` inside that one process. Above 1 against the default in-memory `RATELIMIT_STORAGE_URI`, startup refuses. |
 | `DEMO_MODE` | `true` puts the seeded demo account on the landing page. `DEMO_EMAIL` / `DEMO_PASSWORD` are published on that page, so change them from the repo's defaults. |
 | `SENTRY_DSN` | Optional. Unset = no error reporting; the app boots either way. |
 | `SMTP_HOST`, `MAIL_FROM` | Optional, and both are needed for either to count. Unset = the instance sends no digests; see §7. |
@@ -111,7 +147,10 @@ seconds. `--wait` returns only once `db` is healthy and the app containers are
 up.
 
 Then create the first account, which is the instance's admin — and therefore
-the account whose search settings drive the shared crawl:
+the account whose search settings drive the shared crawl. Nothing is scraped
+until it exists: the worker holds the schedule until the box has an admin, so
+that the first crawl runs on your search terms rather than on the demo
+account's (which, with `DEMO_MODE=true`, the worker creates at boot):
 
 ```bash
 docker compose exec web python3 -m jobmatch.setpassword
@@ -142,30 +181,77 @@ real `timestamp`.
 
 `deploy/backup.sh` dumps Postgres and tars the CVs (which live in a volume, not
 in the database), verifies both archives, copies them off the box and prunes
-local copies older than `KEEP_DAYS`.
+copies older than `KEEP_DAYS` locally and `REMOTE_KEEP_DAYS` on the remote.
+
+`REMOTE_TOOL` picks the transport, because the two kinds of target do not speak
+the same protocol:
 
 ```bash
 sudo crontab -e
-# 17 3 * * *  REMOTE_TARGET=u1234@u1234.your-storagebox.de:jobmatch/ \
+# an object store — the free path (Oracle Object Storage, B2, R2):
+# 17 3 * * *  REMOTE_TOOL=rclone REMOTE_TARGET=oracle:jobmatch/ \
+#             /opt/jobmatch/deploy/backup.sh >> /var/log/jobmatch-backup.log 2>&1
+#
+# an ssh target — unchanged behaviour (a Storage Box, another machine):
+# 17 3 * * *  REMOTE_TOOL=rsync REMOTE_TARGET=u1234@u1234.your-storagebox.de:jobmatch/ \
 #             /opt/jobmatch/deploy/backup.sh >> /var/log/jobmatch-backup.log 2>&1
 ```
 
-**Then restore one.** A backup that has never been restored is not a backup:
+**Do not make the remote a second free VM.** Oracle reclaims an Always Free
+*compute* instance that idles under 20 % CPU, network and memory for 7 days, and
+a machine whose only job is to receive one 5 MB file a night is idle by
+definition — it is the one target that gets deleted for working correctly.
+Object Storage carries no such rule: 20 GB Always Free and 50 000 API requests a
+month, against a measured 5.4 MB dump plus 52 KB of CVs per night. Put the
+bucket in the same EU region as the box; the tenancy's home region is fixed at
+signup, so that choice is made once (see `ROADMAP.md` Phase 9 item 7).
+
+For `rclone`, configure the remote once as root — the cron entry runs as root
+and reads root's `~/.config/rclone/rclone.conf`:
 
 ```bash
-deploy/restore-check.sh /var/backups/jobmatch/jobmatch-<stamp>.sql.gz
+sudo rclone config      # Oracle: "Oracle Object Storage", or S3-compatible
+sudo rclone lsd oracle: # it can see the bucket before cron depends on it
 ```
 
-It restores into a scratch database inside the same container, diffs the row
-counts and the `sum(match_score)` against live, drops the scratch database, and
-exits non-zero on any mismatch. Nothing it does touches the live database.
+**Then restore one — from the remote, not from the box.** A backup that has
+never been restored is not a backup, and a backup restored from the local copy
+only proves `pg_dump` works:
+
+```bash
+deploy/backup-pull.sh --latest          # prints the path it fetched
+deploy/restore-check.sh /var/backups/jobmatch/pulled/jobmatch-<stamp>.sql.gz
+```
+
+`backup-pull.sh` fetches into its own directory rather than over the local copy,
+so the file under test is unambiguously the one that came back. It re-runs the
+same `gzip -t` after the pull, because it is the round trip being tested and not
+the dump. `restore-check.sh` then restores into a scratch database inside the
+same container, diffs the row counts and the `sum(match_score)` against live,
+drops the scratch database, and exits non-zero on any mismatch. Nothing either
+script does touches the live database.
 
 ## 6. Deploys
 
 `.github/workflows/deploy.yml` runs after CI goes green on `main`: it SSHes in,
-checks out that exact commit, rebuilds and restarts with `--wait`, and then
-fetches `https://$DOMAIN/login`. A container that does not come up healthy fails
-the workflow instead of quietly serving a 502.
+checks out that exact commit, rebuilds and restarts with `--wait` passing the sha
+as `RELEASE`, and then reads that sha back out of `https://$DOMAIN/healthz` before
+fetching `/login`. A container that does not come up healthy fails the workflow
+instead of quietly serving a 502.
+
+Two things that check has to get right, both measured rather than assumed:
+
+- **`--wait` can only fail on a service that declares a healthcheck.** Compose
+  reports one without a healthcheck "Healthy" and exits 0 *while it is
+  crash-looping*, so all four services in `docker-compose.yml` declare one. Before
+  they did, a `worker` that died at boot deployed green — and nothing downstream
+  noticed, because the smoke test only ever reaches `web` through `caddy`.
+- **A status code alone cannot tell "this commit is live" from "something answers
+  on this name".** A parked page at the same hostname returns 200 and passed. The
+  sha comparison against `/healthz` is what closes that, which matters most on a
+  free subdomain whose A record is set by hand.
+
+`tests/test_deploy.py` asserts both, plus that every secret below is named here.
 
 Repository secrets it needs:
 
@@ -208,8 +294,20 @@ PUBLIC_BASE_URL=https://jobmatch.yourdomain.tld
 Port 587 is plaintext until STARTTLS upgrades it; 465 is encrypted before the
 first byte of SMTP. `SMTP_SSL` and `SMTP_STARTTLS` each default off the port, so
 the usual pair needs neither — setting them the wrong way round is the reason a
-relay hangs up on you. Add SPF and DKIM records for `MAIL_FROM`'s domain at the
-relay's instructions, or every message is spam by default.
+relay hangs up on you. Turning *both* off is the one combination that is
+refused rather than obeyed: `AUTH` on an unencrypted socket is the password on
+the wire, and it takes `SMTP_ALLOW_INSECURE_AUTH=true` to say you meant it.
+The relay's certificate is verified either way — an untrusted one fails the
+send, it does not downgrade it.
+
+Add SPF and DKIM records for `MAIL_FROM`'s domain at the relay's instructions,
+or every message is spam by default. Everything on this side of that is already
+done: each message carries its own `Date`, `Message-ID` and
+`Auto-Submitted: auto-generated`, both bodies are encoded 7-bit clean so no
+relay has to be asked about `8BITMIME`, and the envelope sender is the address
+in `From:` — which is the alignment DMARC checks once SPF has passed. The EHLO
+name and the `Message-ID` domain both come from `MAIL_FROM`'s domain; override
+them with `MAIL_DOMAIN` if the relay wants a different name.
 
 Then check it without sending anything, and send one on purpose:
 

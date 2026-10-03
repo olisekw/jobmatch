@@ -374,6 +374,42 @@ class ScheduleTests(QueueTestCase):
             "there are no search settings to scan with, and nobody to scan for",
         )
 
+    def test_a_box_with_only_the_demo_account_does_not_scrape(self):
+        """The first boot of a demo-enabled box, before `setpassword` is run.
+
+        Measured on a real four-container first boot: `up` creates the demo
+        account within a second and the crawl started ten seconds later —
+        before the admin existed, on the demo persona's search terms. The
+        guard above was meant to cover this and did not, because
+        `admin_user_id` falls back to the *first* account and the demo is it.
+        `db.has_admin` is the question that tells the two apart.
+        """
+        from jobmatch import demo
+        config.SCAN_INTERVAL_HOURS = 6
+        db.delete_user(self.conn, self.admin)
+        demo.reset(self.conn)
+        self.assertIsNotNone(demo.demo_user(self.conn), "the demo account is there")
+        self.assertFalse(
+            worker.due_for_scan(self.conn),
+            "the demo is never an admin, so nothing may crawl on its settings",
+        )
+        self.assertIsNone(worker.maybe_schedule(self.conn))
+
+    def test_an_admin_arriving_is_what_starts_the_schedule(self):
+        """…and the fix must not be "a demo-enabled box never scans"."""
+        from jobmatch import demo
+        config.SCAN_INTERVAL_HOURS = 6
+        db.delete_user(self.conn, self.admin)
+        demo.reset(self.conn)
+        self.assertFalse(worker.due_for_scan(self.conn))
+        owner = db.create_user(self.conn, "owner@example.test", "x", is_admin=True)
+        self.conn.commit()
+        self.assertTrue(worker.due_for_scan(self.conn))
+        self.assertEqual(
+            self.scan_row(worker.maybe_schedule(self.conn))["requested_by"], owner,
+            "and it runs on the admin's settings, not the demo's",
+        )
+
 
 # ── The routes in front of the queue ─────────────────────────
 
@@ -588,6 +624,153 @@ class EnrichFailureTests(QueueTestCase):
         self.assertEqual(state.failed, 0, "and therefore nothing failed")
 
 
+class EnrichBacklogTests(QueueTestCase):
+    """The enrich queue is the whole pool's, so it needs an order and a floor.
+
+    `_enrich_phase` reads every row still missing a description, not only the
+    ones this scan found — a fetch can fail, and a later scan retrying it is
+    what repairs that. Unbounded and ordered by `id` that is a scan that cannot
+    finish and spends what time it has on the oldest rows in the table: a
+    `scan_days = 0` window left 4 478 rows pending, about fifteen hours at the
+    real detail delays, and three consecutive live scans died part-way through
+    one having enriched nothing anybody was going to read.
+    """
+
+    class CountingSource(FakeSource):
+        name = "counting"
+        label = "Counting board"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.fetched = []
+
+        def fetch_detail(self, page, url):
+            self.fetched.append(url)
+            return "A python developer role. Django, React."
+
+    def setUp(self):
+        super().setUp()
+        self._sources = scan.SOURCES
+        self._delays = (config.MIN_DETAIL_DELAY, config.MAX_DETAIL_DELAY)
+        self._ceiling = config.MAX_DETAIL_FETCHES
+        config.MIN_DETAIL_DELAY = config.MAX_DETAIL_DELAY = 0.0
+        self.source = self.CountingSource()
+        scan.SOURCES = {"counting": self.source}
+
+    def tearDown(self):
+        scan.SOURCES = self._sources
+        config.MIN_DETAIL_DELAY, config.MAX_DETAIL_DELAY = self._delays
+        config.MAX_DETAIL_FETCHES = self._ceiling
+        super().tearDown()
+
+    def pending(self, source_id, posted_at):
+        self.conn.execute(
+            """INSERT INTO jobs (source, source_id, title, link, description, posted_at)
+               VALUES ('counting', :sid, 'python developer',
+                       :link, '', :posted)""",
+            {"sid": source_id, "link": f"https://example.test/{source_id}",
+             "posted": posted_at},
+        )
+        self.conn.commit()
+
+    def run_enrich(self):
+        """One scan's enrich phase, start to finish.
+
+        The row is closed out afterwards so a second call is a *second* scan —
+        the queue refuses to claim while one is still running, which is the
+        point of it.
+        """
+        scan.enqueue(self.conn, self.admin)
+        state = scan.ScanState(self.conn, scan.claim_next(self.conn, "worker-1"))
+        scan._enrich_phase(state, self.conn, None)
+        self.conn.execute(
+            "UPDATE scans SET status = 'done', finished_at = :now WHERE id = :id",
+            {"id": state.scan_id, "now": display.utcnow()},
+        )
+        self.conn.commit()
+        return state
+
+    def test_the_newest_posting_is_enriched_first(self):
+        """Inserted oldest-id-last, so `ORDER BY id` would invert this."""
+        self.pending("old", "2026-01-01")
+        self.pending("middle", "2026-06-01")
+        self.pending("new", "2026-09-01")
+        config.MAX_DETAIL_FETCHES = 3
+
+        self.run_enrich()
+
+        self.assertEqual([u.rsplit("/", 1)[1] for u in self.source.fetched],
+                         ["new", "middle", "old"])
+
+    def test_the_ceiling_stops_a_scan_that_could_not_otherwise_finish(self):
+        for n in range(10):
+            self.pending(f"j{n}", f"2026-09-{n + 1:02d}")
+        config.MAX_DETAIL_FETCHES = 4
+
+        state = self.run_enrich()
+
+        self.assertEqual(len(self.source.fetched), 4)
+        self.assertEqual(state.enriched, 4)
+        # …and what it did get through is the newest four, not the oldest.
+        self.assertEqual([u.rsplit("/", 1)[1] for u in self.source.fetched],
+                         ["j9", "j8", "j7", "j6"])
+
+    def test_what_the_ceiling_left_is_the_next_scans_and_is_still_pending(self):
+        for n in range(6):
+            self.pending(f"j{n}", f"2026-09-{n + 1:02d}")
+        config.MAX_DETAIL_FETCHES = 4
+
+        self.run_enrich()
+        self.assertEqual(self.conn.scalar(
+            "SELECT COUNT(*) FROM jobs WHERE TRIM(description) = ''"), 2)
+
+        # The next scan picks up exactly the two that were left.
+        self.source.fetched.clear()
+        self.run_enrich()
+        self.assertEqual([u.rsplit("/", 1)[1] for u in self.source.fetched],
+                         ["j1", "j0"])
+        self.assertEqual(self.conn.scalar(
+            "SELECT COUNT(*) FROM jobs WHERE TRIM(description) = ''"), 0)
+
+    def test_an_undated_row_is_ordered_by_when_we_saw_it_rather_than_dropped(self):
+        """`posted_at` is NULL for ~3% of the pool; they still need reading."""
+        self.pending("undated", None)
+        config.MAX_DETAIL_FETCHES = 5
+
+        self.run_enrich()
+
+        self.assertEqual(len(self.source.fetched), 1)
+        self.assertEqual(self.conn.scalar(
+            "SELECT COUNT(*) FROM jobs WHERE TRIM(description) = ''"), 0)
+
+    def test_a_free_skip_does_not_spend_the_budget(self):
+        """The ceiling counts fetches, not rows — a feed board costs nothing.
+
+        Counting rows instead would let a pool full of feed-board postings use
+        up a scan's whole allowance without a single request going out.
+        """
+        class Feed(FakeSource):
+            name = "feed"
+            label = "Feed board"
+            has_detail_page = False
+
+        scan.SOURCES = {"counting": self.source, "feed": Feed()}
+        for n in range(5):
+            self.conn.execute(
+                """INSERT INTO jobs (source, source_id, title, link, description, posted_at)
+                   VALUES ('feed', :sid, 'x', :link, '', '2026-09-20')""",
+                {"sid": f"f{n}", "link": f"https://example.test/f{n}"})
+        self.conn.commit()
+        for n in range(3):
+            self.pending(f"j{n}", f"2026-09-{n + 1:02d}")
+        config.MAX_DETAIL_FETCHES = 3
+
+        self.run_enrich()
+
+        self.assertEqual(len(self.source.fetched), 3,
+                         "the five free skips must not have eaten the allowance")
+
+
 class EnrichProvidesTests(QueueTestCase):
     """A source's structured fields beat regex extraction — here too.
 
@@ -735,3 +918,62 @@ class CrawlRegionsTests(QueueTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── The crawl window ─────────────────────────────────────────
+
+class ScanWindowTests(QueueTestCase):
+    """How far back a scan reaches is a setting, and it is bounded.
+
+    The number is handed to every board as its freshness parameter, so it is
+    also what sizes the enrich backlog behind the scan — the `scan_days = 0`
+    window in `EnrichBacklogTests` is the reason there is no "all the way back"
+    any more. `config.scan_window` is read here rather than `settings` directly
+    so a row written before the bounds existed still produces a crawl.
+    """
+
+    class WindowSource(FakeSource):
+        name = "window"
+        label = "Window board"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.windows = []
+
+        def search(self, page, terms, days, known_ids, ctx):
+            self.windows.append(days)
+            return super().search(page, terms, days, known_ids, ctx)
+
+    def setUp(self):
+        super().setUp()
+        self._sources = scan.SOURCES
+        self.source = self.WindowSource()
+        scan.SOURCES = {"window": self.source}
+        db.set_settings(self.conn, self.admin, {"enabled_sources": ["window"]})
+
+    def tearDown(self):
+        scan.SOURCES = self._sources
+        super().tearDown()
+
+    def window_for(self, stored):
+        db.set_settings(self.conn, self.admin, {"scan_days": stored})
+        scan.enqueue(self.conn, self.admin)
+        scan.run_claimed(self.conn, scan.claim_next(self.conn, "worker-1"))
+        return self.source.windows[-1]
+
+    def test_the_boards_are_asked_for_the_window_that_was_saved(self):
+        self.assertEqual(self.window_for(14), 14)
+
+    def test_a_legacy_unbounded_window_reads_as_the_widest_allowed(self):
+        """`0` used to mean "look all the way back"; the widest window is the
+        nearest honest reading of it, and it is a bounded one."""
+        self.assertEqual(self.window_for(0), config.SCAN_DAYS_MAX)
+
+    def test_a_window_outside_the_bounds_is_clamped_rather_than_obeyed(self):
+        self.assertEqual(self.window_for(365), config.SCAN_DAYS_MAX)
+        self.assertEqual(self.window_for(-3), config.SCAN_DAYS_MAX)
+
+    def test_a_stored_value_that_is_not_a_number_still_scans(self):
+        """It reaches `int()` on the way into a board's query string; a scan
+        that raises there is a scan that fetches nothing at all."""
+        self.assertEqual(self.window_for("whenever"), config.SCAN_DAYS_MAX)

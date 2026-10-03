@@ -3,6 +3,191 @@
 One line per change, newest first. The `/roadmap-task` skill appends a sentence here after
 each completed roadmap task. The plan lives in `ROADMAP.md`; the rationale in `PROJECT.md`.
 
+## 2026-10-03
+- **The list was full of jobs Oliver cannot take, and a score could not say so.** Of 245 fresh
+  Profesia postings, 96 — a receptionist, a toolmaker, a junior project manager, an insurance
+  intern — sat at exactly 37.6 on a frontend developer's list, above his threshold, because the
+  four job-side components cannot tell what a job *is*; 38 more named a level above him and 93
+  were in towns he cannot commute to. `scoring.ineligible` answers that as a separate question
+  from the score — wrong trade, level above you, out of reach — and `strict_match` turns it from
+  a note into a cut. Three findings underneath it: a *title* states a level where the extracted
+  column cannot ("lead a small team" is prose about a job that is not), and a range keeps its
+  lowest rung, so "webový manažér (junior - senior)" survives; Profesia declares no `worktype`,
+  so "možnosť práce z domu" in an ad for an office on Bottova 2a had been storing `remote` and
+  collecting a full location score, and the place field now outranks the prose; and "engineer" in
+  Slovakia is mostly a factory, so `ROLE_OTHER_FIELDS` sits between the discipline rung and the
+  generic one — after it, which is what lets "frontend developer for a logistics platform" keep
+  its discipline. Bare "front" left the frontend vocabulary with it: on a title it finds "front
+  office". The Jobs page was stripped to the list those rules make possible — eight filters, the
+  score slider and the chip row all gone, the title now opening the posting on the board — and
+  a list with no board asked for shows the admin's enabled boards rather than every board the
+  instance has ever scraped. 245 → 17 fresh, 233 in the whole Profesia pool. 579 tests.
+
+## 2026-10-01
+- **The shared crawl was owned by an account nobody could log into** — `users` still held the
+  pre-Phase-3 `local@jobmatch.local` row with an empty password hash and `is_admin = 1`, and
+  `db.admin_user_id` is "the lowest-id admin", so every scheduled scan since 11 August read its
+  boards, terms and window off a persona that cannot be signed in as. Phase 3 had already stopped
+  *creating* that account precisely because it "would silently take the first-user-is-the-admin
+  slot", and nothing ever went back for the row already in the table. `backfill.demote_ghost_admin`
+  demotes a passwordless admin whenever a real one exists — never the last one, since an unowned
+  instance stops scanning — and demotes rather than deletes, because those `user_jobs` rows are the
+  single-user era's triage history. Applied to the live DB: the crawl now runs on
+  `[redacted-email]`'s settings, whose board list was carried over from the ghost's so the
+  shared pool did not narrow from seven boards to one.
+
+- **A `.env` that cannot be read is now loud** — `config.py` catches python-dotenv's ImportError so
+  a missing convenience dependency cannot break startup, which was right, but it was also silent:
+  on the interpreter actually running this instance the package was absent, so a fully populated
+  `.env` configured *nothing*. The app served for weeks on the built-in dev `SECRET_KEY` while the
+  file set a real one, the worker crawled on the default 6-hour interval while the file said 0, and
+  every edit to it changed nothing at all. `config.DOTENV_IGNORED` is set when the file exists and
+  the loader does not, and it is checked **first** in `check_runtime_config` — before the
+  SECRET_KEY and debug refusals, which cannot be trusted when the file feeding them is unread: a
+  deployment is refused, a laptop gets a warning. The worker logs it too, being the process `.env`
+  configures most and the one that runs for days unattended.
+
+## 2026-09-28
+- **The Jobs list can be asked how old a posting is** — a Posted filter (`1 / 3 / 7 / 14 / 30
+  days or newer`) over `jobs.posted_at`, bounded by `sources.base.posted_cutoff` so the window in
+  the dropdown and the `scan_days` window in Settings cannot mean the same word a day apart; the
+  257 rows whose date no board gave are out of every window rather than assumed fresh, and the
+  filter reads `posted_at` rather than the sorts' `COALESCE(..., scraped_at)` because a
+  three-year-old ad found this morning is not a fresh job.
+
+- **An age past a week keeps its digit** — `display.relative_date` now prints "8 days ago" for a
+  month instead of collapsing 7–13 days to "last week", since on a job board the number of days
+  *is* the fact being asked for. Pinned the whole derivation down while it was open: a posting is
+  stored as an absolute date and every age is subtracted from today per request, so one stored row
+  reads "4 days ago" on the day it was scraped and "8 days ago" four days later — now a test
+  rather than a property nothing checked, plus a `CLAUDE.md` invariant.
+
+- **Bounded the enrich phase, which is why no scan had finished since 10 September** — it reads
+  every row in the pool still missing a description, which is right (a failed fetch is only ever
+  repaired by a later scan retrying it) but was unbounded and ordered by `id`: 4 478 rows pending
+  at 8–16 s each is about fifteen hours, and it spent them oldest-first, so scans 16–19 each died
+  having enriched nothing anybody was going to read. Now newest-first under a
+  `MAX_DETAIL_FETCHES` ceiling, with the remainder left to the next scan — the same "is the last
+  one older than the interval?" schedule everything else runs on — and the progress strip showing
+  what this run will attempt instead of how deep the queue is.
+
+- **Set the crawl window to 7 days on the account that owns it** — the shared crawl reads
+  `db.admin_user_id`'s settings, which is the legacy `local@jobmatch.local` (user 1), and its
+  scan window was `0` = "look all the way back"; scans 16, 17 and 18 all died part-way through
+  multi-hour runs because of it.
+
+## 2026-09-25
+- **Fixed the login rate limit by making the web tier one process** — `Dockerfile` now runs
+  `--threads 8` and passes no `--workers`, so gunicorn takes the count from `WEB_CONCURRENCY`
+  where `check_runtime_config` can refuse it above 1 against the in-memory limiter, and a lock
+  around `db._ENGINES` settles what threads made a live question; re-measured on the
+  four-container stack through Caddy, 30 POSTs to `/login` now 429 at the 11th instead of the
+  21st, while the old `--workers 2` command re-run beside it still let 20 through.
+
+- **Planned Phase 10, because Phase 9 ran out of halves an agent can do rather than running out
+  of items** — its remaining seven are all hard-blocked on the box and the subdomain, so the new
+  phase carries the four things still worth doing without one: the login rate limit the shipped
+  image actually breaks (`--workers 2` against a per-process `memory://` store let 20 of 30 POSTs
+  through a 10/min limit, to be fixed with one threaded process rather than a redis), the crawl's
+  peak memory against the worker's own 1500m limit, a checker so a document cannot assert a count
+  the tree contradicts (`PROJECT.md` went stale again in eleven days), and the robots.txt-first
+  sourcing half of the EU-remote reach leak; the `## Later` bucket is emptied in the same pass —
+  two bullets promoted, and the `IDEA.md` one deleted as false since `6ed3dfe`.
+
+## 2026-09-23
+- **Confirmed Remotive answers its whole feed to every query and cut the crawl from 19 requests
+  a scan to 1** — the follow-up Phase 9 item 8 parked for a second live confirmation: `search`,
+  `category`, `limit` and the bare URL all return the same eighteen ids (`total-job-count` says
+  18 too), so the feed is read once and the terms filter in Python as they always have for
+  Remote OK, which also brings us onto the max-4-requests-a-day the board asks for in its own
+  `0-legal-notice` and stops the alarm being told 342 listings for a board showing 18.
+- **Put the digest on a real socket for the first time, and found it was leaving without a
+  `Date`, without a `Message-ID`, 8-bit under an envelope that never declared it, and willing
+  to hand its password to an unencrypted relay** — the half of Phase 9 item 9 that needs no
+  box: `tests/test_mail.py` now drives `mail.send` against a real SMTP server (STARTTLS, 465,
+  AUTH, DATA) and asserts against the bytes that arrive, so both RFC-required headers plus
+  `Auto-Submitted` are written here rather than hoped for from the relay, both bodies are
+  quoted-printable (zero bytes over 127 on the wire, Slovak accents decoding back intact),
+  credentials are refused on an unencrypted socket unless `SMTP_ALLOW_INSECURE_AUTH` says
+  otherwise, and EHLO gives `MAIL_FROM`'s domain instead of the container's dotless hostname
+  that smtplib turns into a bare `[172.18.0.4]`.
+
+## 2026-09-22
+- **Proved the silent-board alarm's counts against the boards' live markup, and found one board
+  it could never have woken on** — the half of Phase 9 item 8 that needs no box: every enabled
+  adapter was driven against the real boards and each `ctx.seen()` report cross-checked against
+  the response rather than a fixture (all seven exact, including Kariéra's against the board's
+  own "Aktuálna ponuka práce (6)" and Jobs.cz's 749 cards over 26 pages), which showed that
+  Kariéra counted the card *container* instead of the offers it could read, so breaking the live
+  page four realistic ways — the title heading renamed, its `h2` changed, the offer URL reshaped,
+  the id dropped — left `seen` at six while the parser produced nothing; it now counts what it
+  read, as Profesia and Jobs.cz already did, while pagination keeps asking the rows the board
+  served so a promoted slot cannot truncate the crawl.
+
+## 2026-09-17
+- **A first boot crawled the job boards on the demo account's settings, and no longer does** —
+  the half of Phase 9 item 5 that needs no box: a real four-container boot from a `.env` copied
+  out of `.env.example` queued a scheduled scan ten seconds after `up`, before the admin
+  `setpassword` creates existed, because `due_for_scan` asked `admin_user_id` — which falls back
+  to the first account, and on a demo-enabled box the first account is the demo the worker itself
+  had just created — so it now asks `db.has_admin`, which exists for exactly that distinction;
+  the same boot proved `mark_deployed()` is what puts `Secure` on the session cookie (the
+  container reported `SESSION_COOKIE_SECURE = False` and the cookie carried it anyway, and
+  commenting the call out of `wsgi.py` dropped it), that a blank `SECRET_KEY` and the
+  `JOBMATCH_DEBUG=1` the example ships each make `up --wait` exit 1 rather than serve, and that
+  `.env.example` was missing one variable the code reads (`LOCAL_USER_EMAIL`), all guarded now by
+  `tests/test_firstboot.py`.
+- **The deploy's own checking could not fail, and now can** — the half of Phase 9 item 6 that
+  needs no box: `docker compose up --wait` reports a service with no healthcheck `Healthy`
+  while it crash-loops (measured: exit 1, eight restarts, `--wait` exited 0), which meant a
+  deliberately broken `worker` — the only container that scrapes, digests and resets the demo —
+  deployed green, so `worker` and `caddy` now declare one too; and the smoke test asserted a
+  status code alone, so a parked page on the same hostname passed, which is fixed by finally
+  wiring the `RELEASE` that `config.py` and `.env.example` both claimed the workflow passed and
+  it never did, and reading the sha back out of `/healthz`; both shell bodies were driven
+  against a real sshd and a real TLS endpoint until every failure exited non-zero, and
+  `tests/test_deploy.py` guards it.
+
+## 2026-09-13
+- **Re-planned Phase 9 item 7's backups onto a free target and landed its box-free half** —
+  the remote is an object store because Oracle reclaims idle *compute* and a backup VM is idle
+  by definition, so `backup.sh` gained a `REMOTE_TOOL` (`rclone` alongside the unchanged
+  `rsync`), remote pruning it never had, and a `backup-pull.sh` to fetch a dump back, without
+  which the restore the roadmap asks for could only ever have used the local copy; verified by
+  driving the whole script against a local rclone backend, where the pulled dump restored to
+  the same `jobs`/`user_jobs`/`sum(match_score)` as live, and `rclone --immutable` turned out
+  to replace an existing backup and exit 0 rather than refuse it.
+- **Proved the image actually builds and runs on `linux/arm64`** — the half of Phase 9 item 4
+  that needs no box — with a native `--no-cache` build on this aarch64 machine (every compiled
+  dependency a prebuilt aarch64 wheel, no source builds) and Chromium 151 launching and
+  rendering inside the worker's own 1500m/512m-shm limits; along the way the item's claim that
+  "nothing has ever built this Dockerfile on arm64" turned out to be wrong by a week, and CI's
+  arm64 Chromium check turned out to be a no-op that **exits 0 having run nothing** because
+  `docker run` was missing `-i`, so the heredoc never reached `python3 -`.
+
+## 2026-09-12
+- **CI now builds the image on `linux/arm64` too**, the one half of Phase 9 item 4 that
+  needs no box — as a matrix over platform rather than the two-platform build the roadmap
+  asked for, because `load: true` is single-platform only and that literal would have gone
+  green while silently dropping the `docker run` check that proves the image runs; the arm64
+  leg also asserts Chromium's ELF `e_machine` against its own platform, since the base image
+  ships browsers per architecture.
+- **Re-planned Phase 9 item 4 onto a free box**, which means an ARM one — an Oracle Always
+  Free Ampere A1 (2 OCPU / 12 GB since June, not the 4/24 everyone quotes) and a Public
+  Suffix List subdomain so Let's Encrypt still issues, with the architecture risk measured
+  rather than deferred: the Playwright base image's arm64 variant carries an **AArch64**
+  Chromium at the exact revision 1.62.0 pins, every compiled dependency has an aarch64 wheel,
+  and the two things that actually bite are Oracle reclaiming an idle instance and CI never
+  having built this Dockerfile on arm64 at all.
+- **The scorer now reads the job title**, through a fifth `role` component and a floor under
+  the skills denominator — built off-roadmap on 09-10 and left unrecorded, now verified
+  read-only against the live 7 970-job pool, where it clears out a top-of-list that was
+  83 jobs tied at a perfect 100 ("junior esg consultant", one extracted skill, scored 100.0)
+  and replaces it with React and Python roles, and mutation-tested, which found three
+  invariants `CLAUDE.md` states but nothing tested — a role miss returning `None` instead of
+  `0.0` let that same consultancy tie with "junior react developer" at 100 and passed the
+  whole suite.
+
 ## 2026-09-06
 - **Brought `PROJECT.md` back in line with the tree** — six adapters became seven, 318 tests 433, 2375 jobs 6842, and the key decision **"No FX conversion for salary"**, reversed a week ago, was replaced by the one that actually holds; the remote-work bullet still described a single `jobs.country`, and the rate-limit rough edge is a live defect rather than a hypothetical because the image ships two gunicorn workers.
 - **Exercised `caddy` locally against the shipped Caddyfile** and found its body cap was dead

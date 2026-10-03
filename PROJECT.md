@@ -67,8 +67,11 @@ things drove that change, and both are still the shape of the codebase:
   it with a conditional `UPDATE`, and every bit of live state a status poll
   needs (phase, counters, heartbeat, cancel flag) is a column. No scan state in
   module globals, so any web process can answer "how is it going?" — which is
-  what lets the web tier be several gunicorn workers while exactly one
-  container scrapes.
+  what lets the web tier scale out while exactly one container scrapes. It is
+  not what *decides* the shipped process count: that is one, because the
+  in-memory rate limiter is per-process (Phase 10 item 1), and the scan-state
+  argument is silent on limiter buckets — it says a second process would be
+  correct about scans, not that it would be correct about everything.
 - **Scheduling is a query, not a timer.** "Is the newest scan older than the
   interval?" survives a restart, cannot drift and cannot double-fire if a second
   worker ever exists. The nightly demo reset uses the same pattern. No
@@ -160,8 +163,14 @@ rather than scaffolded. Every risky migration has been verified against a
 - **The digest has never met a real mail relay.** It has been run end to end
   against a socket on localhost, so the code path is proven; deliverability
   (SPF, DKIM, spam folders) needs the box, like TLS.
-- **Rate-limit storage is in-memory and per-process, and the image ships two
-  gunicorn workers** — so this is a live defect, not a hypothetical one. It was
-  measured through the proxy: 30 CSRF-valid POSTs against a 10/min limit got 20
-  through before the first 429, because each worker counts its own. A shared
-  store is the fix, and `RATELIMIT_STORAGE_URI` is where a redis URL goes.
+- ~~Rate-limit storage is in-memory and per-process, and the image ships two
+  gunicorn workers.~~ **Fixed 2026-09-25 (Phase 10 item 1).** The image now runs
+  one process with `--threads 8`, so the in-memory limiter is one bucket in one
+  heap. Re-measured on the same four-container stack through Caddy: 30
+  CSRF-valid POSTs against `/login`'s 10/min, first 429 at **#11**, 10 through —
+  and the old `--workers 2` command, re-run on that same stack to prove the
+  measurement measures something, still let **20** through with the first 429
+  landing at #15 rather than #11, which is the non-determinism the bullet was
+  really about. `RATELIMIT_STORAGE_URI` stays for the day a second process is
+  genuinely wanted, and `check_runtime_config` now refuses `WEB_CONCURRENCY > 1`
+  against `memory://` at boot so the combination cannot return.

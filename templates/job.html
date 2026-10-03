@@ -33,7 +33,7 @@ function render(job) {
         <h1>${esc(job.title)}</h1>
         <p class="subtitle">${jobMeta(job)}</p>
         ${keyFacts(job)}
-        <div class="tags">${factTags(job)}</div>
+        <div class="tags">${factTags(job, { full: true })}</div>
       </div>
       <div class="detail-score">
         <div class="score big ${scoreClass(job.match_score)}">${scoreText(job.match_score)}</div>
@@ -49,7 +49,8 @@ function render(job) {
     </div>
 
     <h2>How this score is made up</h2>
-    <div class="panel">${breakdownPanel(job.score_breakdown)}</div>
+    <div class="panel">${breakdownPanel(job.score_breakdown,
+        { ineligibleLabel: job.ineligible_label })}</div>
 
     <h2>Skills found in this posting</h2>
     <div class="panel">

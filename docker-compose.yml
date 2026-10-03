@@ -65,6 +65,10 @@ services:
       # lines say which one they came from and are parseable when interleaved.
       JOBMATCH_COMPONENT: web
       LOG_FORMAT: json
+      # The deployed commit. `deploy.yml` passes the sha it just checked out and
+      # then asks /healthz to read it back, which is how the smoke test tells
+      # "this deploy is live" from "something answers on this name".
+      RELEASE: ${RELEASE:-dev}
     expose:
       - "8000"
     healthcheck:
@@ -85,6 +89,24 @@ services:
       DATA_DIR: /app/data
       JOBMATCH_COMPONENT: worker
       LOG_FORMAT: json
+      RELEASE: ${RELEASE:-dev}
+    healthcheck:
+      # It exists so that `up --wait` can *fail* on this container. Measured:
+      # compose reports a service with no healthcheck "Healthy" and exits 0
+      # even while it is crash-looping — so before this, a worker that died at
+      # boot deployed green, and nothing downstream noticed, because the
+      # deploy's smoke test only ever touches `web` through `caddy`.
+      #
+      # What it asserts is what a *second* process in this container can see:
+      # the app imports and the database answers. That covers the boot failures
+      # (a restarting container can never report healthy) and Postgres going
+      # away; it does not cover a loop that is alive but wedged, which is a
+      # heartbeat's job and is not what a deploy is asking about.
+      test: ["CMD-SHELL", "python3 -c \"from jobmatch import db; db.get_conn().scalar('SELECT 1')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     # The same image `web` just built — local only, never on a registry, so say
     # so rather than have compose try to pull `jobmatch:latest` from Docker Hub.
     pull_policy: never
@@ -121,6 +143,17 @@ services:
       # Let's Encrypt rate-limits that.
       - caddy-data:/data
       - caddy-config:/config
+    healthcheck:
+      # Caddy's own admin API, which it listens on at 127.0.0.1:2019 inside the
+      # container. Same reason as `worker`: without a healthcheck `up --wait`
+      # cannot fail on this service. The deploy workflow would still catch a
+      # dead caddy from outside, but `docker compose up -d --build --wait` by
+      # hand (DEPLOY.md §6) has no curl after it and would report success.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     depends_on:
       - web
 

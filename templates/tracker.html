@@ -82,7 +82,19 @@ async function loadApplications() {
 function renderTabs() {
   const counts = {};
   for (const def of GROUPS) counts[def.value] = apps.filter(a => inGroup(a, def)).length;
-  document.getElementById("tracker-tabs").innerHTML = GROUPS.map(def => `
+  /* Only the groups that have something behind them, plus "Everything" and
+     whichever tab you are standing on. A tab reading 0 is a word and a zero
+     with nothing to click through to, and six of them was most of this page's
+     chrome for a tracker holding one application. They come back on their own
+     as the search fills up.
+
+     The vocabulary is untouched: `display.APPLICATION_GROUPS` still decides
+     which statuses form which group and what each is called — this only
+     declines to draw a tab nothing is under. Keeping the selected group drawn
+     is what lets a bookmarked `#withdrawn` still explain itself. */
+  const shown = GROUPS.filter(def =>
+    !def.statuses.length || counts[def.value] > 0 || def.value === group);
+  document.getElementById("tracker-tabs").innerHTML = shown.map(def => `
     <button type="button" class="stat-tab${def.value === group ? " active" : ""}"
             data-group="${esc(def.value)}" aria-pressed="${def.value === group}">
       <span class="value">${counts[def.value]}</span>

@@ -19,6 +19,7 @@ Everything a user owns (status, score, settings, applications) hangs off
 """
 
 import json
+import threading
 
 import sqlalchemy as sa
 from sqlalchemy import (
@@ -258,12 +259,24 @@ JOB_ORDER = {
 }
 
 DEFAULT_SETTINGS = {
-    "weight_skill": 0.4,
-    "weight_worktype": 0.25,
-    "weight_location": 0.2,
-    "weight_seniority": 0.15,
+    # Five weights that sum to 1 for a new account. `weight_role` reads the job
+    # title and is second only to skills, because it is the component that
+    # answers "is this even the job I do" — see `scoring._role_component`.
+    # An account that predates it keeps its four stored weights and picks this
+    # one up from here; nothing renormalizes, because `score_job` divides by
+    # the weight it actually used.
+    "weight_skill": 0.3,
+    "weight_role": 0.25,
+    "weight_worktype": 0.2,
+    "weight_location": 0.15,
+    "weight_seniority": 0.1,
     "min_match_score": 20,
     "seniority_strict": False,
+    # Whether a job this person cannot take is hidden rather than ranked low.
+    # Off by default, because it throws jobs away and that should be asked for:
+    # on, `scoring.ineligible` removes postings whose title names no work they
+    # do, names a level above them, or sits in a town they cannot commute to.
+    "strict_match": False,
     "search_terms": config.SEARCH_PROFILES[config.DEFAULT_SEARCH_PROFILE],
     "active_profile": config.DEFAULT_SEARCH_PROFILE,
     "enabled_sources": ["profesia", "kariera", "jobscz", "remoteok", "remotive",
@@ -295,7 +308,15 @@ SCAN_SETTING_KEYS = ("search_terms", "enabled_sources", "scan_days", "active_pro
 
 # ── Engine / connection ──────────────────────────────────────
 
+# One engine per URL, and the lock is what makes that true under threads. The
+# web tier runs `--threads 8` in one process (Dockerfile), so two requests can
+# reach `get_engine` before either has cached anything; without the lock both
+# build an engine, both get a QueuePool, and the loser's pool is invisible to
+# the cache but very much alive — two pools of 5+10 against a limit chosen for
+# one. SQLAlchemy engines and pools are themselves thread-safe; this dict is
+# the part that was not.
 _ENGINES = {}
+_ENGINES_LOCK = threading.Lock()
 
 
 def _url(db_path=None):
@@ -308,12 +329,24 @@ def _url(db_path=None):
 
 
 def get_engine(db_path=None):
-    """One engine per URL, created on first use and cached."""
+    """One engine per URL, created on first use and cached.
+
+    Double-checked: the fast path is a plain dict read on every request after
+    the first, and only the creation is serialized.
+    """
     url = _url(db_path)
     engine = _ENGINES.get(url)
     if engine is not None:
         return engine
+    with _ENGINES_LOCK:
+        engine = _ENGINES.get(url)
+        if engine is not None:
+            return engine
+        return _build_engine(url)
 
+
+def _build_engine(url):
+    """Create and cache the engine for `url`. Called under `_ENGINES_LOCK`."""
     is_sqlite = url.startswith(config.SQLITE_URL_PREFIX)
     if is_sqlite:
         path = config.sqlite_path(url)
@@ -670,6 +703,7 @@ def get_weights(conn, user_id):
     s = get_all_settings(conn, user_id)
     return {
         "skills": float(s["weight_skill"]),
+        "role": float(s["weight_role"]),
         "worktype": float(s["weight_worktype"]),
         "location": float(s["weight_location"]),
         "seniority": float(s["weight_seniority"]),
@@ -730,6 +764,12 @@ def crawl_regions(conn):
 
 
 def get_user_prefs(conn, user_id):
+    # Imported here rather than at the top: `scoring` reads its prefs and its
+    # weights from this module, so the two can only know each other one way
+    # round at import time. This stays the single place that answers "what are
+    # this user's preferences", which is worth the deferred import.
+    from . import scoring
+
     s = get_all_settings(conn, user_id)
     regions = user_regions(s)
     return {
@@ -741,6 +781,11 @@ def get_user_prefs(conn, user_id):
         "reachable": places.reachable_codes(regions),
         "seniority": (s["user_seniority"] or "").strip().lower(),
         "worktype": (s["user_worktype"] or "").strip().lower(),
+        # Derived from the search terms rather than asked for separately, and
+        # expanded once here for the same reason `reachable` is — scoring a
+        # thousand jobs should not re-read the vocabulary a thousand times.
+        "disciplines": scoring.user_disciplines(s["search_terms"]),
         "skills": {str(x).strip().lower() for x in s["user_skills"] if str(x).strip()},
         "seniority_strict": bool(s["seniority_strict"]),
+        "strict_match": bool(s["strict_match"]),
     }

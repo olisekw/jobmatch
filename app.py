@@ -47,7 +47,7 @@ from jobmatch import (
     scoring,
     worker,
 )
-from jobmatch.sources import SOURCES
+from jobmatch.sources import SOURCES, base
 
 obs.setup_logging(component="web")
 obs.init_sentry()
@@ -88,6 +88,16 @@ def check_runtime_config(deployed=None):
     """
     if deployed is None:
         deployed = not config.IS_LOOPBACK
+    if config.DOTENV_IGNORED:
+        # First, because every value in that file is being ignored — including
+        # the ones the checks below read, so none of them can be trusted to mean
+        # what the operator wrote down. A deployment is refused; a laptop is
+        # told, because the local instance that found this had served for weeks
+        # on the dev key while `.env` set a real one. Installing python-dotenv
+        # is the whole fix.
+        if deployed:
+            raise RuntimeError(config.DOTENV_IGNORED_MESSAGE)
+        log.warning("%s", config.DOTENV_IGNORED_MESSAGE)
     if deployed and config.SECRET_KEY == config.DEV_SECRET_KEY:
         raise RuntimeError(
             "SECRET_KEY is unset and the built-in dev key is only for loopback — "
@@ -95,6 +105,22 @@ def check_runtime_config(deployed=None):
         )
     if deployed and config.DEBUG:
         raise RuntimeError("JOBMATCH_DEBUG must be off when not serving on loopback.")
+    if config.WEB_CONCURRENCY > 1 and config.RATELIMIT_ENABLED and (
+        config.RATELIMIT_STORAGE_URI.startswith("memory:")
+    ):
+        # The rate limits are the brute-force defence on /login and /signup, and
+        # an in-memory limiter counts per process: two workers is not "twice the
+        # limit" but a limit that depends on which worker the request landed on.
+        # This refusal exists because the combination was shipped once already —
+        # the Dockerfile said `--workers 2` and nothing read that number back.
+        raise RuntimeError(
+            f"WEB_CONCURRENCY={config.WEB_CONCURRENCY} with "
+            f"RATELIMIT_STORAGE_URI={config.RATELIMIT_STORAGE_URI!r}: an in-memory "
+            "rate limiter is per-process, so more than one web process makes the "
+            "limits on /login and /signup non-deterministic. Use --threads for "
+            "concurrency inside one process, or point RATELIMIT_STORAGE_URI at a "
+            "shared store before raising WEB_CONCURRENCY."
+        )
 
 
 _deployed = False
@@ -153,10 +179,15 @@ def bootstrap_db():
     finally:
         conn.close()
 
-WEIGHT_KEYS = ("weight_skill", "weight_worktype", "weight_location", "weight_seniority")
+WEIGHT_KEYS = ("weight_skill", "weight_role", "weight_worktype",
+               "weight_location", "weight_seniority")
+# `search_terms` is in here as well as in `db.SCAN_SETTING_KEYS`: it tells the
+# crawl what to fetch *and*, since the role component, tells the scorer which
+# disciplines this user is looking for. Editing it has to re-score, or the
+# Settings page would change what "frontend" means and leave the list stale.
 RESCORE_KEYS = WEIGHT_KEYS + (
     "user_location", "user_regions", "user_seniority", "user_worktype", "user_skills",
-    "seniority_strict",
+    "seniority_strict", "search_terms",
 )
 APPLICATION_STATUSES = db.APPLICATION_STATUSES
 JOB_LIMIT = 500   # the most rows one request may ask for
@@ -209,6 +240,14 @@ def template_globals():
     return {
         "allow_signup": config.ALLOW_SIGNUP,
         "min_password_length": config.MIN_PASSWORD_LENGTH,
+        # How many boards are actually registered. Interpolated rather than
+        # written out, because the landing page said "six" for as long as there
+        # were seven and nothing could notice.
+        "board_count": len(SOURCES),
+        # The score components, in drawing order, for the breakdown bars and the
+        # weight sliders. A template global rather than a settings key: the job
+        # detail page draws bars without ever calling `/api/settings`.
+        "score_components": display.score_components(),
         # Who may trigger the shared crawl, and how often it happens anyway.
         "can_scan": config.SCAN_ENABLED and getattr(current_user, "is_admin", False),
         "scan_interval_hours": config.SCAN_INTERVAL_HOURS if config.SCAN_ENABLED else 0,
@@ -590,6 +629,32 @@ def _pay_floor_options():
             for floor in PAY_FLOORS]
 
 
+# What the Posted filter offers: a ceiling on a posting's age in days. The pool
+# is cumulative — every scan adds to it and nothing ages out — so "what went up
+# this week?" was a question the list could not be asked, though it is the whole
+# reason to look at a job board twice.
+#
+# A window is an **age**, not a date range, and it is measured against today
+# rather than against the scan that found the row, because `jobs.posted_at` is
+# an absolute date: a posting the board called "4 days ago" on 3 Oct is stored
+# as 29 Sep and is 8 days old on 7 Oct, whoever asks and whenever. So "7 days
+# or newer" hides it, and the same row read on 3 Oct would not have been.
+# One stored date, every age derived from it — the same reason `posted_display`
+# is computed per request instead of at insert time.
+#
+# The bound is `sources.base.posted_cutoff`, the *crawl's* own window function,
+# so "7 days or newer" selects exactly what a `scan_days = 7` scan was allowed
+# to fetch. Two different arithmetics would have made the window in Settings
+# and the window in this dropdown disagree by a day about the same word.
+POSTED_WINDOWS = (1, 3, 7, 14, 30)
+
+
+def _posted_window_options():
+    return [{"value": days,
+             "label": f"{days} day{'' if days == 1 else 's'} or newer"}
+            for days in POSTED_WINDOWS]
+
+
 def _job_payload(row):
     """One `jobs`+`user_jobs` row as the client wants to read it.
 
@@ -607,6 +672,11 @@ def _job_payload(row):
     job["posted_display"] = display.relative_date(job["posted_at"])
     job["posted_exact"] = display.exact_time(job["posted_at"])
     job["status_label"] = display.label(display.JOB_STATUS, job["status"])
+    # Why this job was cut, if it was. Read off the breakdown the scorer wrote,
+    # so the sentence a page prints and the rule that fired cannot drift.
+    job["ineligible_label"] = display.label(
+        display.INELIGIBLE, (job["score_breakdown"] or {}).get("ineligible")
+    )
     job["worktype_label"] = display.label(display.WORKTYPE, job["worktype"])
     job["seniority_label"] = display.label(display.SENIORITY, job["seniority"])
     job["employment_label"] = display.label(
@@ -654,6 +724,7 @@ def _job_filters():
     worktype = request.args.get("worktype", "")
     country = request.args.get("country", "")
     pay = request.args.get("pay", "")
+    posted = request.args.get("posted", "")
     q = request.args.get("q", "").strip().lower()
     try:
         min_score = float(request.args.get("min_score"))
@@ -667,6 +738,27 @@ def _job_filters():
     if source:
         where.append("j.source = :source")
         params["source"] = source
+    else:
+        # No board asked for means "the boards this instance uses" — not every
+        # board it has ever used. Switching the crawl to Profesia alone left
+        # 8 000 rows from six disabled boards sitting in "To review", a backlog
+        # no scan will ever refresh, and a list that keeps offering them is
+        # offering stale work. An explicit `source` still wins, so a board can
+        # be looked at after it is switched off.
+        #
+        # Read from the **admin**, because `enabled_sources` is one of
+        # `db.SCAN_SETTING_KEYS`: the crawl is shared and so is the board list
+        # it honours. Asking the viewer's own copy instead empties the list for
+        # everyone else — a second account keeps the default seven boards it
+        # never chose, and a pool scraped from a board outside that set became
+        # invisible to them while the admin saw it fine.
+        conn_ = get_db()
+        enabled = [str(name) for name in db.get_all_settings(
+            conn_, db.admin_user_id(conn_))["enabled_sources"] if name in SOURCES]
+        if enabled:
+            binds = {f"src{i}": name for i, name in enumerate(enabled)}
+            where.append("j.source IN (" + ", ".join(f":{b}" for b in binds) + ")")
+            params.update(binds)
     if worktype in display.WORKTYPE:
         where.append("j.worktype = :worktype")
         params["worktype"] = worktype
@@ -702,6 +794,18 @@ def _job_filters():
     elif pay.isdigit() and int(pay) in PAY_FLOORS:
         where.append(f"{salary.HOURLY_EUR_SQL} >= :min_hourly")
         params["min_hourly"] = float(pay)
+    # Age, asked of `posted_at` and of nothing else. A row the board dated is
+    # the only row that can answer "is this newer than a week?", so the 3% with
+    # no parsed date drop out of every window rather than being assumed fresh —
+    # the same reason the sorts coalesce to `scraped_at` and this does not:
+    # "when we saw it" is not "when it went up", and a five-year-old ad found
+    # yesterday would top a freshness filter built on the wrong column.
+    # A plain string comparison, because `posted_at` is TEXT holding ISO dates,
+    # which sort lexicographically in that order on both SQLite and Postgres —
+    # and it reads `idx_jobs_posted` rather than computing a date per row.
+    if posted.isdigit() and int(posted) in POSTED_WINDOWS:
+        where.append("j.posted_at IS NOT NULL AND j.posted_at >= :posted_since")
+        params["posted_since"] = base.posted_cutoff(int(posted))
     if q:
         where.append("(LOWER(j.title) LIKE :q OR LOWER(j.company) LIKE :q)")
         params["q"] = f"%{q}%"
@@ -969,6 +1073,7 @@ def api_settings_get():
         pool_countries, settings["effective_regions"]
     )
     settings["pay_floors"] = _pay_floor_options()
+    settings["posted_windows"] = _posted_window_options()
     # Labels live in one place; the pages that need a <select> or a chip read
     # them from here rather than keeping their own copy.
     settings["profile_labels"] = {
@@ -983,11 +1088,22 @@ def api_settings_get():
     ]
     settings["seniority_options"] = display.options(display.SENIORITY)
     settings["worktype_options"] = display.options(display.WORKTYPE)
+    settings["sort_options"] = display.options(display.JOB_SORT)
+    # The CV text is never rendered — Settings only asks *whether* there is one,
+    # to word the dropzone. Sending the whole thing put a few kilobytes of the
+    # user's resume in every `/api/settings` response, Jobs and Tracker included.
+    settings["resume_present"] = bool(settings.pop("resume_text", ""))
     # Whether the *instance* can send mail at all. The per-user `digest_enabled`
     # above is a preference; this is a fact about the deployment, and Settings
     # says which of the two is why no email arrives.
     settings["digest_available"] = digest.enabled()
     settings["digest_interval_hours"] = config.DIGEST_INTERVAL_HOURS
+    # The bounds the Crawl panel's day input is built with. Served rather than
+    # written into the template, for the same reason the sort and pay options
+    # are: the page renders what the server will actually accept, so the control
+    # and the clamp in `api_settings_put` cannot drift apart.
+    settings["scan_days_min"] = config.SCAN_DAYS_MIN
+    settings["scan_days_max"] = config.SCAN_DAYS_MAX
     return jsonify(settings)
 
 
@@ -1025,6 +1141,19 @@ def api_settings_put():
             updates["min_match_score"] = max(0.0, min(100.0, float(updates["min_match_score"])))
         except (TypeError, ValueError):
             return jsonify({"error": "The minimum match score needs to be a number."}), 400
+
+    if "scan_days" in updates:
+        # The crawl window is a number of days between `config.SCAN_DAYS_MIN`
+        # and `SCAN_DAYS_MAX`, and this is where that is decided — the input's
+        # `min`/`max` are a hint to a browser, not a rule, and `jobmatch/scan.py`
+        # feeds this straight to every board's freshness parameter. Clamped like
+        # the threshold above rather than refused, so a stale page cannot fail a
+        # save over a bound it never knew about; only a non-number is an error.
+        try:
+            days = int(float(updates["scan_days"]))
+        except (TypeError, ValueError):
+            return jsonify({"error": "The scan window needs to be a number of days."}), 400
+        updates["scan_days"] = max(config.SCAN_DAYS_MIN, min(config.SCAN_DAYS_MAX, days))
 
     if "digest_enabled" in updates:
         # A checkbox arrives as a bool; anything else is coerced rather than

@@ -326,6 +326,53 @@ def migrate_scan_queue(conn):
     _rebuild_transaction(config.DB_PATH, lambda cursor: _rebuild(cursor, db.scans))
 
 
+def demote_ghost_admin(conn):
+    """Stop a passwordless bootstrap account owning the shared crawl.
+
+    `admin_user_id` is "the lowest-id admin", and on any database that predates
+    Phase 3 that is `config.LOCAL_USER_EMAIL` — the implicit local user the old
+    `bootstrap_db` created, with no password hash, which Phase 3 then stopped
+    creating precisely because it "would silently take the first-user-is-the-
+    admin slot at signup". It did, on this instance, and nothing went back for
+    the row already in the table: the crawl ran on a persona nobody could log in
+    as, so the real owner's boards, terms and window were read by no scan and
+    could not be corrected from the UI either.
+
+    An account with an empty hash cannot be logged into (`auth.verify_password`
+    has nothing to compare), so it cannot be the instance's owner. Demoted, not
+    deleted: its `user_jobs` rows are the single-user era's triage history and
+    losing them is not this function's call. Only ever when a *real* admin
+    exists — demoting the last one would leave the instance unowned and stop the
+    schedule (`worker.due_for_scan` asks `db.has_admin`).
+    """
+    ghost = conn.execute(
+        "SELECT id, email FROM users "
+        "WHERE is_admin = 1 AND (password_hash IS NULL OR password_hash = '')"
+    ).fetchall()
+    if not ghost:
+        print("admin: no passwordless admin, nothing to do")
+        return
+    real = conn.scalar(
+        "SELECT id FROM users "
+        "WHERE is_admin = 1 AND password_hash IS NOT NULL AND password_hash <> '' "
+        "ORDER BY id LIMIT 1"
+    )
+    if real is None:
+        # A database whose only admin has no password yet: `setpassword` is the
+        # answer, not a demotion that would leave the crawl with no settings.
+        print("admin: the only admin has no password — run `jobmatch.setpassword`")
+        return
+    for row in ghost:
+        conn.execute(
+            "UPDATE users SET is_admin = 0 WHERE id = :id", {"id": row["id"]}
+        )
+        print(f"admin: demoted {row['email']} (id={row['id']}) — it cannot be logged into")
+    owner = conn.execute(
+        "SELECT email FROM users WHERE id = :id", {"id": real}
+    ).fetchone()
+    print(f"admin: the crawl now runs on {owner['email']}'s settings (id={real})")
+
+
 def move_resume(user_id):
     """CVs are personal data — one file per user instead of one shared cv.pdf."""
     legacy, target = config.LEGACY_RESUME_PDF, config.resume_path(user_id)
@@ -381,6 +428,7 @@ def main():
     backfill_country(conn)
     migrate_countries(conn)
     update_enabled_sources(conn, user_id)
+    demote_ghost_admin(conn)
 
     after = {
         (row["user_id"], row["status"]): row["n"]

@@ -40,9 +40,16 @@
     <label>Your skills <span class="hint">comma-separated; auto-filled from your CV</span></label>
     <textarea id="s-skills" rows="3"></textarea>
   </div>
-  <div class="save-row">
-    <button class="btn mt" id="save-profile">Save profile</button>
-    <p class="save-note" id="note-profile" role="status" hidden></p>
+
+  {# Search terms live here, not under Scanning, because they are *yours*: they
+     are in `app.RESCORE_KEYS`, and since the role component they decide what
+     the title of every job is scored against. Only the three settings below
+     them are the instance's. #}
+  <div class="mt">
+    <label>What you're looking for <span class="hint">one per line or comma-separated</span></label>
+    <div class="chip-row" id="profile-chips"></div>
+    <textarea id="s-terms" rows="4"></textarea>
+    <p class="hint">These decide the Role part of every score{% if can_scan %}, and they are what the shared crawl asks the boards for{% endif %}.</p>
   </div>
 </div>
 
@@ -50,69 +57,73 @@
 <div class="panel">
   <label>Minimum match score: <output id="s-threshold-out" class="mono"></output></label>
   <input type="range" id="s-threshold" min="0" max="100" step="5">
-  <p class="hint">Jobs below this still show under "Everything new" — they just don't count as matches. Takes effect straight away, no re-scan needed.</p>
+  <p class="hint">Jobs below this still show on the Jobs page — drop its score floor to nothing and they are all there. They just don't count as matches. Takes effect straight away, no re-scan needed.</p>
 
-  <div class="mt">
-    <label>What matters most <span class="hint">these are relative; they get balanced out when you save</span></label>
-    <div class="weight-row"><span>Skills</span><input type="range" id="w-skill" min="0" max="100" step="5"><span class="val" id="w-skill-out"></span></div>
-    <div class="weight-row"><span>Worktype</span><input type="range" id="w-worktype" min="0" max="100" step="5"><span class="val" id="w-worktype-out"></span></div>
-    <div class="weight-row"><span>Location</span><input type="range" id="w-location" min="0" max="100" step="5"><span class="val" id="w-location-out"></span></div>
-    <div class="weight-row"><span>Seniority</span><input type="range" id="w-seniority" min="0" max="100" step="5"><span class="val" id="w-seniority-out"></span></div>
-  </div>
-
-  <div class="check-row">
-    <input type="checkbox" id="s-strict">
-    <label for="s-strict" style="margin:0">Strict seniority — a job at a different level scores zero</label>
-  </div>
-  <div class="save-row">
-    <button class="btn mt" id="save-matching">Save matching rules</button>
-    <p class="save-note" id="note-matching" role="status" hidden></p>
-  </div>
+  {# Five sliders and a rule you set once and then leave alone. The face of this
+     panel is the one number that gets moved. #}
+  <details class="tune" id="tune-weights">
+    <summary>Fine-tune the weights <span class="hint" id="tune-summary"></span></summary>
+    <div class="mt">
+      <label>What matters most <span class="hint">these are relative; they get balanced out when you save</span></label>
+      {# One row per score component, from `display.SCORE_COMPONENTS`, so a slider
+         cannot go missing when a component is added — which is what happened to
+         the landing page. The id keeps its historical shape: `weight_skill` is
+         singular, and every stored row already spells it that way. #}
+      {% for c in score_components %}
+        {% set slider = c.weight_key | replace('weight_', 'w-') %}
+        <div class="weight-row"><span>{{ c.label }}</span><input type="range" id="{{ slider }}" min="0" max="100" step="5"><span class="val" id="{{ slider }}-out"></span></div>
+      {% endfor %}
+      <div class="check-row">
+        <input type="checkbox" id="s-strict">
+        <label for="s-strict" style="margin:0">Strict seniority — a job at a different level scores zero</label>
+      </div>
+      {# The cut, not a weight: a job this says no to is not on the list at all.
+         It is in this panel because it is the other half of "what counts", and
+         the label has to name all three rules — a switch that silently removes
+         four jobs in five should say which four. #}
+      <div class="check-row">
+        <input type="checkbox" id="s-only-takeable">
+        <label for="s-only-takeable" style="margin:0">Only jobs I can take —
+          hide another trade, a level above me, or a town I cannot get to</label>
+      </div>
+    </div>
+  </details>
 </div>
 
-<h2>Scanning</h2>
+{% if can_scan %}
+{# The crawl is one shared scrape on the admin's settings — `jobmatch/scan.py`
+   reads these off whoever `db.has_admin` finds, never off the account that
+   happens to be looking. They used to render for everybody, which meant seven
+   board checkboxes and a scan window that did nothing at all for most accounts,
+   the demo included. #}
+<h2>Crawl</h2>
 <div class="panel">
-  <label>Presets</label>
-  <div class="chip-row" id="profile-chips"></div>
-
-  <div class="mt">
-    <label>Search terms <span class="hint">one per line or comma-separated; each one is searched on every board below</span></label>
-    <textarea id="s-terms" rows="4"></textarea>
-  </div>
-
+  <p class="hint">One scrape serves every account on this instance, and it runs on these settings.</p>
   <div class="settings-grid mt">
     <div>
-      <label>Only jobs from the last <span class="hint">days — 0 looks all the way back</span></label>
-      <input type="number" id="s-days" min="0" max="90" style="width:110px">
+      <label>Only jobs from the last <span class="hint">days — <span id="s-days-range"></span></span></label>
+      <input type="number" id="s-days" step="1" style="width:110px">
     </div>
     <div>
       <label>Job boards</label>
       <div id="source-checks"></div>
     </div>
   </div>
-  <div class="save-row">
-    <button class="btn mt" id="save-scan">Save scan settings</button>
-    <p class="save-note" id="note-scan" role="status" hidden></p>
-  </div>
 </div>
+{% endif %}
 
-<h2>Notifications</h2>
+<h2>Account</h2>
 <div class="panel">
-  <div class="check-row">
+  <p>Signed in as <strong class="mono">{{ current_user.email }}</strong>.</p>
+  <div class="check-row mt">
     <input type="checkbox" id="s-digest">
     <label for="s-digest" style="margin:0">Email me new matches</label>
   </div>
   <p class="hint" id="digest-hint"></p>
-  <div class="save-row">
-    <button class="btn mt" id="save-digest">Save notifications</button>
-    <p class="save-note" id="note-digest" role="status" hidden></p>
-  </div>
 </div>
 
-<h2>Account</h2>
 <div class="panel danger-zone">
-  <p>Signed in as <strong class="mono">{{ current_user.email }}</strong>.</p>
-  <p class="hint mt">
+  <p class="hint">
     Deleting your account erases your CV, your settings, your scores and your whole
     tracker. The shared job pool stays; nothing of yours does. This cannot be undone.
   </p>
@@ -126,6 +137,18 @@
   <button class="btn mt" id="delete-account">Delete my account</button>
 </div>
 
+{# One endpoint, so one save. Five buttons meant editing the threshold, a weight
+   and your skills and then pressing "Save profile" silently threw two of the
+   three away — and each press was its own full rescore. #}
+<div class="save-bar" id="save-bar" hidden>
+  <span id="save-count"></span>
+  <span class="save-note" id="save-note" role="status"></span>
+  <span class="save-actions">
+    <button class="btn ghost" id="discard-changes">Discard</button>
+    <button class="btn" id="save-changes">Save changes</button>
+  </span>
+</div>
+
 {% endblock %}
 {% block scripts %}
 <script>
@@ -135,12 +158,33 @@ let settings;
    user input, and a JS literal is the one place it must not be spliced raw. */
 const DIGEST_TO = {{ current_user.email | tojson }};
 
-function bindRange(id, value, format) {
+/* The sliders are rendered from the same list `app.js` draws the bars from, so
+   the panel and the breakdown cannot disagree about which components exist or
+   what they are called. The id is the weight key with its prefix swapped. */
+function sliderId(component) {
+  return component.weight_key.replace("weight_", "w-");
+}
+
+/* Setting a range and wiring one are deliberately separate: `render()` runs
+   again after every save and discard, and a bind that also added a listener
+   would stack one more on each pass. */
+function setRange(id, value) {
   const input = document.getElementById(id);
-  const out = document.getElementById(`${id}-out`);
   input.value = value;
-  out.textContent = format(value);
-  input.addEventListener("input", () => out.textContent = format(input.value));
+  document.getElementById(`${id}-out`).textContent = rangeText(id, value);
+}
+
+function rangeText(id, value) {
+  return id === "s-threshold" ? `${value}%` : `${value}`;
+}
+
+function wireRanges() {
+  for (const id of ["s-threshold", ...SCORE_PARTS.map(sliderId)]) {
+    const input = document.getElementById(id);
+    input.addEventListener("input", () => {
+      document.getElementById(`${id}-out`).textContent = rangeText(id, input.value);
+    });
+  }
 }
 
 function sameSet(a, b) {
@@ -196,7 +240,15 @@ async function init() {
     toast(err.message);
     return;
   }
+  render();
+  wireRanges();
+  refreshSaveBar();
+}
 
+/* Paint every control from `settings`. Called on load and again after a save or
+   a discard, which is what makes "Discard" a one-liner: the last thing the
+   server told us is still in `settings`. */
+function render() {
   document.getElementById("s-location").value = settings.user_location || "";
   // Both lists are worded by the server, so "Mid-level" here and on a job card
   // are always the same word.
@@ -205,15 +257,14 @@ async function init() {
   document.getElementById("s-skills").value = (settings.user_skills || []).join(", ");
   renderRegions();
 
-  bindRange("s-threshold", settings.min_match_score, v => `${v}%`);
-  bindRange("w-skill", Math.round(settings.weight_skill * 100), v => `${v}`);
-  bindRange("w-worktype", Math.round(settings.weight_worktype * 100), v => `${v}`);
-  bindRange("w-location", Math.round(settings.weight_location * 100), v => `${v}`);
-  bindRange("w-seniority", Math.round(settings.weight_seniority * 100), v => `${v}`);
+  setRange("s-threshold", settings.min_match_score);
+  for (const c of SCORE_PARTS) {
+    setRange(sliderId(c), Math.round(settings[c.weight_key] * 100));
+  }
   document.getElementById("s-strict").checked = !!settings.seniority_strict;
+  document.getElementById("s-only-takeable").checked = !!settings.strict_match;
 
   document.getElementById("s-terms").value = (settings.search_terms || []).join(", ");
-  document.getElementById("s-days").value = settings.scan_days;
 
   document.getElementById("profile-chips").innerHTML =
     Object.keys(settings.search_profiles).map(name =>
@@ -222,13 +273,29 @@ async function init() {
                 data-profile="${esc(name)}">${esc(settings.profile_labels[name] || name)}</button>`
     ).join("");
 
-  document.getElementById("source-checks").innerHTML =
-    Object.entries(settings.available_sources).map(([name, label]) => `
+  // The crawl panel only renders for an admin — `jobmatch/scan.py` reads these
+  // off whoever owns the instance, so for everyone else they are not settings
+  // at all and the controls are simply absent.
+  // The bounds come from the server, which is also what enforces them — see
+  // `api_settings_put`. Written onto the input rather than into the markup so
+  // the spinner, the hint and the clamp are one number.
+  const days = document.getElementById("s-days");
+  if (days) {
+    days.min = settings.scan_days_min;
+    days.max = settings.scan_days_max;
+    days.value = settings.scan_days;
+    document.getElementById("s-days-range").textContent =
+      `${settings.scan_days_min}–${settings.scan_days_max}`;
+  }
+  const sources = document.getElementById("source-checks");
+  if (sources) {
+    sources.innerHTML = Object.entries(settings.available_sources).map(([name, label]) => `
       <div class="check-row">
         <input type="checkbox" id="src-${esc(name)}" value="${esc(name)}"
                ${(settings.enabled_sources || []).includes(name) ? "checked" : ""}>
         <label for="src-${esc(name)}" style="margin:0">${esc(label)}</label>
       </div>`).join("");
+  }
 
   const digestBox = document.getElementById("s-digest");
   digestBox.checked = !!settings.digest_enabled;
@@ -242,72 +309,151 @@ async function init() {
       + `before. Nothing goes out when there is nothing new.`
     : "This instance has no mail server configured, so no email can be sent from it.";
 
-  if (settings.resume_text) {
+  if (settings.resume_present) {
     document.getElementById("resume-state").textContent =
       `Your CV is loaded — ${plural((settings.user_skills || []).length, "skill")} in your profile. `
       + `Drop a new PDF here to replace it.`;
   }
+  renderTuneSummary();
 }
 
-let noteTimers = {};
+/* ── One endpoint, one save ────────────────────────────────
 
-/* The message belongs beside the button that caused it. A toast for a form
-   error means reading it in the corner of the screen, three seconds, once. */
-function note(key, message, ok) {
-  const el = document.getElementById(`note-${key}`);
+   Every control registers what setting it writes and how to read it. The dirty
+   set is the difference between that and what the server last told us, so the
+   PUT carries what you actually changed — which is also why a rescore now runs
+   once per intent instead of once per panel you happened to press. */
+
+const FIELDS = [
+  { key: "user_location", read: () => val("s-location").trim().toLowerCase() },
+  { key: "user_seniority", read: () => val("s-seniority") },
+  { key: "user_worktype", read: () => val("s-worktype") },
+  { key: "user_skills", read: () => splitList(val("s-skills")) },
+  /* Saving without touching the chips must not quietly pin the derived answer —
+     otherwise moving to Vienna next month would leave the old country behind.
+     So an untouched derived set still reads as "still derived". */
+  { key: "user_regions", read: () =>
+      sameSet(pickedRegions(), settings.effective_regions || []) && derivedRegions()
+        ? [] : pickedRegions() },
+  { key: "search_terms", read: () => splitList(val("s-terms")) },
+  { key: "active_profile", read: () =>
+      document.querySelector("#profile-chips .chip.active")?.dataset.profile || "custom" },
+  { key: "min_match_score", read: () => Number(val("s-threshold")) },
+  { key: "seniority_strict", read: () => checked("s-strict") },
+  { key: "strict_match", read: () => checked("s-only-takeable") },
+  { key: "digest_enabled", read: () => checked("s-digest") },
+  // Admin-only, so absent from the page for everybody else — `present` is what
+  // keeps a missing control from reading as a cleared setting.
+  // An empty or nonsense box reads as "leave it alone" — `|| 0` used to save a
+  // 0, which is the unbounded window the crawl no longer has.
+  { key: "scan_days", read: () => Number(val("s-days")) || settings.scan_days, id: "s-days" },
+  { key: "enabled_sources", id: "source-checks",
+    read: () => [...document.querySelectorAll("#source-checks input:checked")].map(c => c.value) },
+  ...SCORE_PARTS.map(c => ({
+    key: c.weight_key, read: () => Number(val(sliderId(c))) / 100 })),
+];
+
+const val = (id) => document.getElementById(id).value;
+const checked = (id) => document.getElementById(id).checked;
+const splitList = (s) => s.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
+const present = (f) => !f.id || document.getElementById(f.id);
+
+function same(a, b) {
+  if (Array.isArray(a) && Array.isArray(b)) return sameSet(a, b) && a.length === b.length;
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < 1e-9;
+  return a === b;
+}
+
+/* Weights are stored normalised — five numbers that sum to 1 — while the
+   sliders are whole numbers out of 100. Comparing them raw would call the page
+   dirty the moment it loaded, so the comparison is done in the stored shape. */
+function dirtyKeys() {
+  const out = {};
+  const weights = FIELDS.filter(f => f.key.startsWith("weight_"));
+  const raw = weights.map(f => f.read());
+  const total = raw.reduce((a, b) => a + b, 0);
+  weights.forEach((f, i) => {
+    if (total > 0 && !same(Number((raw[i] / total).toFixed(4)), Number(settings[f.key])))
+      out[f.key] = raw[i];
+  });
+  for (const f of FIELDS) {
+    if (f.key.startsWith("weight_") || !present(f)) continue;
+    const value = f.read();
+    if (!same(value, settings[f.key])) out[f.key] = value;
+  }
+  // A weight only moves in company: the route normalises the whole set, so
+  // sending one without the others would renormalise against stale neighbours.
+  if (Object.keys(out).some(k => k.startsWith("weight_"))) {
+    for (const f of weights) out[f.key] = f.read();
+  }
+  return out;
+}
+
+let noteTimer;
+
+function note(message, ok) {
+  const el = document.getElementById("save-note");
   el.textContent = message;
   el.classList.toggle("bad", !ok);
-  el.hidden = false;
-  clearTimeout(noteTimers[key]);
-  if (ok) noteTimers[key] = setTimeout(() => { el.hidden = true; }, 6000);
+  clearTimeout(noteTimer);
+  if (ok && message) noteTimer = setTimeout(() => { el.textContent = ""; }, 6000);
 }
 
-async function save(key, payload, message) {
-  const button = document.getElementById(`save-${key}`);
+/* The bar is the only thing that says "you have unsaved work", so it has to be
+   right after every keystroke, chip and slider — hence one delegated listener
+   on the page rather than one per control. */
+function refreshSaveBar() {
+  const count = Object.keys(dirtyKeys()).length;
+  const bar = document.getElementById("save-bar");
+  bar.hidden = count === 0;
+  document.getElementById("save-count").textContent =
+    count ? `${plural(count, "unsaved change")}` : "";
+  renderTuneSummary();
+}
+
+function renderTuneSummary() {
+  // A disclosure you cannot see into is a blind door: say what is behind it.
+  const top = [...SCORE_PARTS]
+    .map(c => ({ label: c.label, value: Number(val(sliderId(c))) }))
+    .sort((a, b) => b.value - a.value)[0];
+  document.getElementById("tune-summary").textContent = top && top.value
+    ? `— ${top.label.toLowerCase()} counts most${checked("s-strict") ? ", seniority strict" : ""}`
+    : "";
+}
+
+async function saveChanges() {
+  const payload = dirtyKeys();
+  if (!Object.keys(payload).length) return;
+  const button = document.getElementById("save-changes");
   button.disabled = true;
-  note(key, "Saving…", true);
+  note("Saving…", true);
   try {
     const res = await api("/api/settings", { method: "PUT", json: payload });
-    note(key, message + (res.rescored ? " Every job was rescored." : ""), true);
     settings = await api("/api/settings");
+    render();
+    note("Saved." + (res.rescored ? " Every job was rescored." : ""), true);
   } catch (err) {
-    note(key, err.message, false);
+    note(err.message, false);
   } finally {
     button.disabled = false;
+    refreshSaveBar();
   }
 }
 
-document.getElementById("save-profile").addEventListener("click", () => save("profile", {
-  user_location: document.getElementById("s-location").value.trim().toLowerCase(),
-  /* Saving the profile without touching the chips must not quietly pin the
-     derived answer — otherwise moving to Vienna next month would leave the old
-     country behind. So an untouched derived set is stored as "still derived". */
-  user_regions: sameSet(pickedRegions(), settings.effective_regions || []) && derivedRegions()
-    ? [] : pickedRegions(),
-  user_seniority: document.getElementById("s-seniority").value,
-  user_worktype: document.getElementById("s-worktype").value,
-  user_skills: document.getElementById("s-skills").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
-}, "Profile saved."));
+document.getElementById("save-changes").addEventListener("click", saveChanges);
+document.getElementById("discard-changes").addEventListener("click", () => {
+  render();
+  note("", true);
+  refreshSaveBar();
+});
 
-document.getElementById("save-matching").addEventListener("click", () => save("matching", {
-  min_match_score: Number(document.getElementById("s-threshold").value),
-  weight_skill: Number(document.getElementById("w-skill").value) / 100,
-  weight_worktype: Number(document.getElementById("w-worktype").value) / 100,
-  weight_location: Number(document.getElementById("w-location").value) / 100,
-  weight_seniority: Number(document.getElementById("w-seniority").value) / 100,
-  seniority_strict: document.getElementById("s-strict").checked,
-}, "Matching rules saved."));
-
-document.getElementById("save-digest").addEventListener("click", () => save("digest", {
-  digest_enabled: document.getElementById("s-digest").checked,
-}, "Notification settings saved."));
-
-document.getElementById("save-scan").addEventListener("click", () => save("scan", {
-  search_terms: document.getElementById("s-terms").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
-  scan_days: Number(document.getElementById("s-days").value) || 0,
-  enabled_sources: [...document.querySelectorAll("#source-checks input:checked")].map(c => c.value),
-  active_profile: document.querySelector("#profile-chips .chip.active")?.dataset.profile || "custom",
-}, "Scan settings saved."));
+// Everything on this page is a setting, so anything that changes is a change.
+for (const event of ["input", "change", "click"]) {
+  document.addEventListener(event, (e) => {
+    if (e.target.closest("#save-bar, .dropzone, #delete-account, #resume-file")) return;
+    refreshSaveBar();
+  });
+}
 
 document.getElementById("profile-chips").addEventListener("click", (e) => {
   const chip = e.target.closest(".chip");

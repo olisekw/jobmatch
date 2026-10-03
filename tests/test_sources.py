@@ -11,6 +11,7 @@ a page the adapter can no longer read (nothing seen at all).
 Run from the repo root:  python3 -m unittest discover -s tests -t .
 """
 
+import json
 import unittest
 from unittest import mock
 
@@ -244,23 +245,95 @@ class ProfesiaSearchTests(unittest.TestCase):
 
 # ── The same contract, on the other Slovak board ─────────────
 
-class KarieraSeenTests(unittest.TestCase):
-    def test_a_page_of_offers_we_already_know_is_still_reported_as_seen(self):
-        offers = "".join(
-            f"""<div class="offer"><h2 class="offer-title">
-                  <a href="/pracovna-ponuka/{i}/python-developer">Python developer</a>
-                </h2><span class="offer-employer">ACME</span></div>"""
-            for i in range(3)
-        )
-        html = f"<html><body>{offers}</body></html>"
-        ctx = RecordingContext()
-        source = kariera.KarieraSource()
+def kariera_offer(offer_id, title="Python developer", href=None, classes="offer"):
+    href = f"/pracovna-ponuka/{offer_id}/python-developer" if href is None else href
+    return (f'<div class="{classes}"><h2 class="offer-title">'
+            f'<a href="{href}">{title}</a></h2>'
+            f'<span class="offer-employer">ACME</span></div>')
 
+
+def kariera_page(*offers):
+    return "<html><body>" + "".join(offers) + "</body></html>"
+
+
+class KarieraSeenTests(unittest.TestCase):
+    """Kariéra answers the same two questions Profesia and Jobs.cz do, and for
+    three of Phase 9's sessions it answered the second one by counting the card
+    container — which is a count that cannot go wrong, and so an alarm that
+    cannot fire. Driven against the live board on 2026-09-22, four realistic
+    redesigns (the title heading renamed, its `h2` changed, the offer URL
+    reshaped, the id dropped from it) each left six cards standing while the
+    parser read nothing at all.
+    """
+
+    def search(self, html, known_ids=(), term="python"):
+        ctx = RecordingContext()
         with mock.patch.object(kariera, "http_get", return_value=html):
-            stubs = source._search_term("python", 7, {"0", "1", "2"}, ctx)
+            stubs = kariera.KarieraSource()._search_term(term, 7, set(known_ids), ctx)
+        return stubs, ctx
+
+    def test_a_page_of_offers_we_already_know_is_still_reported_as_seen(self):
+        html = kariera_page(*(kariera_offer(i) for i in range(3)))
+
+        stubs, ctx = self.search(html, known_ids={"0", "1", "2"})
 
         self.assertEqual(stubs, [], "nothing new")
         self.assertEqual(ctx.total_seen, 3, "but the board answered with three")
+
+    def test_a_page_this_parser_cannot_read_lists_nothing(self):
+        stubs, ctx = self.search("<html><body><div>redesign</div></body></html>")
+
+        self.assertEqual(stubs, [])
+        self.assertEqual(ctx.total_seen, 0)
+
+    def test_an_offer_whose_title_link_moved_is_not_counted_as_read(self):
+        """The half-redesign: the cards are all still there, and unreadable."""
+        html = kariera_page(kariera_offer(1).replace("offer-title", "title"),
+                            kariera_offer(2))
+
+        stubs, ctx = self.search(html)
+
+        self.assertEqual(ctx.total_seen, 1, "a half-redesign must still trip the alarm")
+        self.assertEqual([s["source_id"] for s in stubs], ["2"])
+
+    def test_an_offer_url_this_parser_cannot_read_is_not_counted_as_read(self):
+        html = kariera_page(kariera_offer(1, href="/ponuka/1/python-developer"),
+                            kariera_offer(2))
+
+        stubs, ctx = self.search(html)
+
+        self.assertEqual(ctx.total_seen, 1)
+        self.assertEqual([s["source_id"] for s in stubs], ["2"])
+
+    def test_promoted_slots_are_neither_read_nor_allowed_to_end_the_crawl(self):
+        """Why `seen` cannot be the number pagination asks.
+
+        A full page the parser only partly understands is still a full page.
+        Counting the read offers and then stopping when *that* falls short of
+        `PER_PAGE` would truncate the crawl at the first page carrying a
+        promoted slot — which is most of them.
+        """
+        full_page = kariera_page(
+            *(kariera_offer(i) for i in range(kariera.PER_PAGE - 1)),
+            kariera_offer(98, href="/redirect.php?id=98"),
+            # A banner slot is not a row the board served at all — it has never
+            # counted towards a page being full, and must not start now.
+            kariera_offer(99, classes="offer highlight"),
+        )
+        pages = []
+
+        def serve(url):
+            pages.append(url)
+            return full_page if len(pages) == 1 else kariera_page(kariera_offer(500))
+
+        ctx = RecordingContext()
+        with mock.patch.object(kariera, "http_get", side_effect=serve):
+            stubs = kariera.KarieraSource()._search_term("python", 7, set(), ctx)
+
+        self.assertEqual(len(pages), 2, "a promoted slot is not the end of the results")
+        self.assertEqual(ctx.seen_counts, [kariera.PER_PAGE - 1, 1],
+                         "and the alarm is still told only what was read")
+        self.assertEqual(len(stubs), kariera.PER_PAGE)
 
 
 # ── Asking the board for a place, instead of filtering its answer ────
@@ -356,6 +429,111 @@ class OtherBoardsIgnoreRegionsTests(unittest.TestCase):
             with mock.patch.object(remotive, "http_get", side_effect=fake_get):
                 source.search(None, ["python"], 7, set(), RecordingContext(regions=regions))
         self.assertEqual(urls[0], urls[1], "same request, narrowed or not")
+
+
+class RemotiveIsReadOnceTests(unittest.TestCase):
+    """The feed *is* the board, so it is read once a scan, not once a term.
+
+    Measured against the live API on 2026-09-22 and again on 2026-09-23:
+    `search=python`, `search=developer`, `search=zzqqxxnonsense`,
+    `category=software-dev`, `limit=5`, `limit=500` and the bare URL all
+    return the same eighteen ids, and the payload's own `job-count` and
+    `total-job-count` both say 18 — there is nothing a request can narrow
+    towards. The board's `0-legal-notice` then asks for "max. 4 times a day …
+    excessive requests will be blocked", and asking per term made nineteen
+    requests a scan on the default profile — seventy-six a day — to be handed
+    the same eighteen jobs nineteen times.
+    """
+
+    TERMS = ["python", "developer", "vývojár", "frontend"]
+
+    def feed(self, *jobs):
+        return json.dumps(
+            {"job-count": len(jobs), "total-job-count": len(jobs), "jobs": list(jobs)}
+        )
+
+    def job(self, job_id=1, title="Senior Python developer", **extra):
+        item = {
+            "id": job_id,
+            "title": title,
+            "company_name": "ACME",
+            "candidate_required_location": "Europe",
+            "publication_date": "2026-09-18T10:00:00",
+            "url": f"https://remotive.com/remote-jobs/{job_id}",
+            "description": "<p>Python and SQL</p>",
+        }
+        item.update(extra)
+        return item
+
+    def search(self, body, terms=None, days=0, known=None):
+        urls = []
+        ctx = RecordingContext()
+
+        def fake_get(url, **kwargs):
+            urls.append(url)
+            return body
+
+        with mock.patch.object(remotive, "http_get", side_effect=fake_get):
+            stubs = remotive.RemotiveSource().search(
+                None, terms or self.TERMS, days,
+                set() if known is None else known, ctx,
+            )
+        return urls, stubs, ctx
+
+    def test_four_search_terms_are_still_one_request(self):
+        urls, _, _ = self.search(self.feed(self.job()))
+        self.assertEqual(len(urls), 1, "one request per scan, whatever the terms")
+
+    def test_the_request_carries_no_query_parameters_at_all(self):
+        """Every one of them is ignored, so sending one is a claim we cannot
+        make — the same rule that keeps a geography off this URL."""
+        urls, _, _ = self.search(self.feed(self.job()))
+        self.assertNotIn("?", urls[0], urls[0])
+
+    def test_the_terms_now_filter_here_instead_of_in_the_request(self):
+        """Nothing asks the board for the term any more, so dropping the local
+        match would quietly import the whole feed."""
+        _, stubs, _ = self.search(self.feed(
+            self.job(1, "Senior Python developer"),
+            self.job(2, "Head of Sales"),
+        ))
+        self.assertEqual([s["source_id"] for s in stubs], ["1"])
+
+    def test_tags_still_count_towards_a_match(self):
+        _, stubs, _ = self.search(self.feed(
+            self.job(3, "Backend engineer", tags=["python", "aws"]),
+        ))
+        self.assertEqual([s["source_id"] for s in stubs], ["3"])
+
+    def test_seen_is_reported_once_and_is_the_board_s_own_number(self):
+        """Per term, the alarm was told 18 × 19 = 342 for a board showing 18."""
+        _, _, ctx = self.search(self.feed(self.job(1), self.job(2, "Head of Sales")))
+        self.assertEqual(ctx.seen_counts, [2])
+
+    def test_seen_counts_rows_it_could_read_not_the_length_of_the_array(self):
+        """A feed that still serves rows the parser can no longer read is the
+        silent redesign `seen` exists to catch — an array length cannot fail."""
+        _, _, ctx = self.search(self.feed(
+            self.job(1),
+            self.job(2, title=""),          # no title
+            {"title": "No id at all"},      # no id
+            "not even an object",
+        ))
+        self.assertEqual(ctx.total_seen, 1)
+
+    def test_already_known_ids_are_still_listings_the_board_showed_us(self):
+        _, stubs, ctx = self.search(self.feed(self.job(1)), known={"1"})
+        self.assertEqual((stubs, ctx.total_seen), ([], 1))
+
+    def test_a_failed_fetch_is_the_source_failing_and_says_so(self):
+        """With one request there is no "other terms might work" left, so this
+        raises and the scan records a source error — which is also what stops
+        the silent-board alarm adding a vaguer complaint on top of it."""
+        with mock.patch.object(remotive, "http_get", side_effect=OSError("503")):
+            with self.assertRaises(OSError):
+                remotive.RemotiveSource().search(
+                    None, self.TERMS, 0, set(), RecordingContext()
+                )
 
 
 # ── The Czech board ──────────────────────────────────────────

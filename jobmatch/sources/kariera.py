@@ -42,13 +42,33 @@ def _search_url(term, days, offset):
 
 
 def parse_offers(html, term_lower, known_ids):
+    """→ (stubs, matched, listed, rows).
+
+    The last two are different questions and a single number answered neither
+    honestly. `listed` is what the silent-board alarm judges this adapter on:
+    offers the parser could actually *read* — a card, its title link, and an id
+    off the href — because a redesign that leaves the cards in place and moves
+    the title is still a page we cannot read, and counting the container would
+    report it as life. (Measured against the live board on 2026-09-22: four
+    realistic redesigns left a `div.offer` count of six standing while the
+    parser produced nothing.) It is the same rule `profesia.parse_jobs` and
+    `jobscz.parse_cards` already count by.
+
+    `rows` is the cruder count — every non-promoted card the board served — and
+    it is what says whether this was a full page. Pagination has to ask that
+    one: a page whose promoted slots the parser skips is still a full page, and
+    stopping on it would silently truncate the crawl.
+    """
     soup = BeautifulSoup(html, "lxml")
     stubs = []
     matched = 0
+    listed = 0
+    rows = 0
 
     for offer in soup.select("div.offer"):
         if "highlight" in offer.get("class", []):
             continue  # promoted banner slot
+        rows += 1
         title_a = offer.select_one("h2.offer-title a")
         if not title_a:
             continue
@@ -59,6 +79,7 @@ def parse_offers(html, term_lower, known_ids):
         if not m:
             continue
         source_id = m.group(1)
+        listed += 1
 
         title = title_a.get_text(strip=True).lower()
         if fold(term_lower) not in fold(title):
@@ -89,7 +110,7 @@ def parse_offers(html, term_lower, known_ids):
             "link": urljoin(BASE_URL, href),
         })
 
-    return stubs, matched
+    return stubs, matched, listed, rows
 
 
 class KarieraSource(JobSource):
@@ -114,17 +135,16 @@ class KarieraSource(JobSource):
                 break
             ctx.progress(f"Searching {self.label} for “{term}” — page {pg + 1}")
             html = http_get(_search_url(term, days, pg * PER_PAGE))
-            page_stubs, matched = parse_offers(html, term_lower, known_ids)
+            page_stubs, matched, listed, rows = parse_offers(html, term_lower, known_ids)
             stubs.extend(page_stubs)
             known_ids.update(s["source_id"] for s in page_stubs)
 
-            # last page reached: fewer than a full page of offers listed
-            soup = BeautifulSoup(html, "lxml")
-            total_offers = len(soup.select("div.offer")) - len(soup.select("div.offer.highlight"))
-            # What the board showed us, whether or not any of it was new — the
-            # number the orchestrator judges "this adapter still works" on.
-            ctx.seen(total_offers)
-            if total_offers < PER_PAGE or (matched == 0 and pg > 0):
+            # What the board showed us *and this parser could read*, whether or
+            # not any of it was new — the number the orchestrator judges "this
+            # adapter still works" on. Pagination asks `rows` instead: "was
+            # this a full page" and "did we understand it" are not one question.
+            ctx.seen(listed)
+            if rows < PER_PAGE or (matched == 0 and pg > 0):
                 break
             if not ctx.sleep(2.0, 5.0):
                 break

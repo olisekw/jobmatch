@@ -73,9 +73,30 @@ USER jobmatch
 
 EXPOSE 8000
 
-# Overridden by the worker service in docker-compose.yml. Two workers because
-# `wsgi.py` is safe with several as of Phase 4 — scan state is in the `scans`
-# row, not in a module global — and one is a single slow request away from
-# looking down. The timeout is generous: a CV upload parses a PDF inline.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", \
+# Overridden by the worker service in docker-compose.yml.
+#
+# ONE process, several threads. It used to be `--workers 2`, on the Phase 4
+# grounds that `wsgi.py` is safe with several — scan state is in the `scans`
+# row, not in a module global — and that one process is a single slow request
+# away from looking down. The first half was an argument about *processes* and
+# it missed what else is per-process: `config.RATELIMIT_STORAGE_URI` defaults
+# to `memory://`, so each worker counted its own bucket and `/login`'s
+# `10 per minute` let 20 through, non-deterministically. Threads keep the
+# second half — a slow request no longer blocks the next one — and make the
+# in-memory limiter correct by construction, one bucket in one heap.
+#
+# 8 is chosen against the connection pool, not against the CPU count: each
+# request holds exactly one `g.db` connection and SQLAlchemy's default
+# QueuePool is 5 + 10 overflow, so 15 is the real ceiling and 8 sits under it
+# with room for anything that opens a second one. The web tier is I/O-light —
+# scanning is another container — so the GIL is not what binds.
+#
+# No `--workers` here on purpose: gunicorn defaults it to WEB_CONCURRENCY (1 if
+# unset), so the process count lives in the environment where `config.py` can
+# read it and `check_runtime_config()` can refuse WEB_CONCURRENCY>1 against an
+# in-memory limiter. A number in a CMD string that nothing reads back is
+# exactly how the two-worker defect survived.
+#
+# The timeout is generous: a CV upload parses a PDF inline.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--threads", "8", "--timeout", "120", \
      "--access-logfile", "-", "--error-logfile", "-", "wsgi:app"]
