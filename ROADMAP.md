@@ -1530,6 +1530,34 @@ renormalizes because `score_job` divides by the weight it actually used.
 against a pool that has grown from 6 842 to 7 970, so it was left as written rather than
 churned into a number that goes stale again with the next scan.
 
+## Asked for directly on 2026-10-03 (after the eligibility cut landed the same day)
+
+Two items, written as a checklist. The first two thirds of item 1 shipped; the last third was
+deferred by the person who asked for it, with its decisions already taken.
+
+1. ~~**Filter out senior jobs.**~~ Shipped earlier the same day as `scoring.ineligible` +
+   `strict_match`, and verified against the live pile: 3 of 94 rows are cut on level.
+   **Still open, and it is one checkbox, not code:** `strict_match` is `False` in the live
+   database, so none of the three cuts is firing. Turning it on today empties the review pile
+   — 61 cut as another trade, 30 as out of reach, 3 as a level above — because **there is not
+   one Košice row and not one remote row in those 94**. That is a true statement about the
+   pool and the real finding under this item: the crawl's terms are broad enough to fill the
+   list with nationwide brigade ads and narrow enough to find nothing in his own town. Fixing
+   *that* is worth more than any further scoring work.
+2. ~~**Push the student / graduate titles through.**~~ `scoring.entry_level` shares the role
+   ladder's last rung, which is what carries such a title past the field cut — see `CLAUDE.md`.
+3. **Then AI for the % match** — *deferred 2026-10-03 by Oliver, not dropped.* The decisions
+   were taken when it was deferred, so they do not need re-deriving: **Haiku 4.5**, and the
+   number sits in a **new `user_jobs.ai_score` (+ `ai_reason`) beside `match_score`**, sorting
+   the list when present and falling back to the formula when absent — never overwriting it,
+   because the digest, the dashboard counts, the threshold and the "matched" clause all read
+   `match_score`, and a failed API call must cost one sort, not a job's score. It runs after
+   the cheap filters, over what survives them (~7–20 rows a scan, so cents), with the CV in a
+   cached prompt prefix. Gated on `ANTHROPIC_API_KEY` being present, inert without it, exactly
+   as the digest is gated on an SMTP host.
+4. ~~**One button that declines everything you did not mark.**~~ `POST /api/jobs/decline-rest`
+   plus its undo — see `CLAUDE.md` for why it reuses the list's own filters.
+
 ## Later (post-launch — deliberately unplanned)
 
 Phase 8's instruction stands: plan these against a deployed thing. Kept here so they are not

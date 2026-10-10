@@ -164,14 +164,11 @@ def mark_sent(conn, user_id, job_ids, when=None):
 # ── Wording it ───────────────────────────────────────────────
 
 def job_url(row):
-    """Where "open this job" goes: the app if it has a public address, else the board.
+    """Where "open this job" goes: straight to the posting on its own board.
 
-    An email has no request to build a URL from, so `PUBLIC_BASE_URL` is the
-    only way the worker can know its own address. Unset — which is every local
-    run — links straight to the posting rather than to `http://None/jobs/12`.
+    There is no internal copy of an ad to link to instead — the app's own job
+    page was removed, not just unlinked here.
     """
-    if config.PUBLIC_BASE_URL:
-        return f"{config.PUBLIC_BASE_URL}/jobs/{row['id']}"
     return row["link"]
 
 

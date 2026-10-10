@@ -126,8 +126,8 @@ things drove that change, and both are still the shape of the codebase:
 ## Current state
 
 **Built:** every phase of `ROADMAP.md` through Phase 8, plus the first two items
-of Phase 9. A Flask app with six pages (landing, dashboard, jobs, job detail,
-tracker, settings) and a JSON API; real accounts on argon2id with CSRF, rate
+of Phase 9. A Flask app with five pages (landing, dashboard, jobs, tracker,
+settings) and a JSON API; real accounts on argon2id with CSRF, rate
 limits and tenant isolation; seven source adapters (`profesia`, `kariera`,
 `jobscz`, `remoteok`, `remotive`, `jobicy`, `arbeitnow`); a scan worker over the
 `scans` queue with live progress, cancel and orphan reconciliation; scoring,

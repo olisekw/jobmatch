@@ -7,17 +7,25 @@
    skill pills that used to be here were all answers to "how do I narrow a list
    I do not trust" — and `scoring.ineligible` answers that upstream now, by not
    putting a job you cannot take on the list in the first place. What is left is
-   a number, a title that goes to the board, four facts, and two buttons. #}
+   a number, a title that goes to the board, the facts — company, town and age
+   in a line, then pay, work mode and country as chips — and two buttons. #}
 
 <h1>Jobs</h1>
 <p class="subtitle" id="subtitle"></p>
 
-<div class="field">
-  <span id="status-label" class="sr-only">Which pile</span>
-  <div class="tabs" id="status-tabs" role="group" aria-labelledby="status-label">
-    <button type="button" data-status="new" class="active" aria-pressed="true">To review</button>
-    <button type="button" data-status="applied" aria-pressed="false">Applied</button>
-    <button type="button" data-status="declined" aria-pressed="false">Declined</button>
+<div class="list-controls">
+  <div class="field">
+    <span id="status-label" class="sr-only">Which pile</span>
+    <div class="tabs" id="status-tabs" role="group" aria-labelledby="status-label">
+      <button type="button" data-status="new" class="active" aria-pressed="true">To review</button>
+      <button type="button" data-status="applied" aria-pressed="false">Applied</button>
+      <button type="button" data-status="declined" aria-pressed="false">Declined</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="source-select" class="sr-only">Board</label>
+    <select id="source-select"><option value="">All boards</option></select>
   </div>
 </div>
 
@@ -27,15 +35,21 @@
   <button type="button" class="btn ghost" id="btn-more">Load more</button>
   <span class="hint" id="more-note"></span>
 </div>
+
+{# The other half of the gesture: mark the ones you applied to on the way down,
+   then say no to the rest in one click. It is under the list because that is
+   where a pass ends, and it is rendered from JS because what it offers depends
+   on the pile — see renderSweep(). #}
+<div class="sweep-row" id="sweep-row" hidden></div>
 <p class="hint kbd-hint">
   Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>a</kbd> applied, <kbd>d</kbd> decline,
-  <kbd>Enter</kbd> open on the board.
+  <kbd>s</kbd> breakdown, <kbd>Enter</kbd> open on the board.
 </p>
 
 {% endblock %}
 {% block scripts %}
 <script>
-const state = { status: "new", offset: 0, jobs: [], total: 0 };
+const state = { status: "new", source: "", offset: 0, jobs: [], total: 0 };
 
 /* The user's own bar, from `/api/settings`. Still sent on every request — the
    control that used to override it is gone, not the floor itself: a job scoring
@@ -46,6 +60,7 @@ let minScore = 0;
 // of two must not be free to land second with its stale rows.
 let latest = 0;
 const list = document.getElementById("job-list");
+wireBreakdownToggles(list);
 
 async function init() {
   showLoading(list);
@@ -58,8 +73,24 @@ async function init() {
   }
   minScore = Number(settings.min_match_score);
   document.getElementById("subtitle").textContent = subtitle(settings);
+  populateSources(settings);
   applyUrl();
   await loadJobs();
+}
+
+/* Only the boards this instance actually crawls — the same list the subtitle
+   names — so the filter can't offer a board whose rows are stale leftovers
+   from before it was switched off. */
+function populateSources(settings) {
+  const select = document.getElementById("source-select");
+  for (const name of settings.enabled_sources || []) {
+    const label = settings.available_sources[name];
+    if (!label) continue;
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
 }
 
 /* What this list is, in one line, said by the settings that make it true. A
@@ -82,6 +113,7 @@ function subtitle(settings) {
 
 function currentParams() {
   const params = new URLSearchParams({ status: state.status });
+  if (state.source) params.set("source", state.source);
   // A score floor only means something in the pile you have not triaged yet:
   // hiding an application you already sent because it scores badly is not a
   // filter, it is losing it.
@@ -92,13 +124,21 @@ function currentParams() {
 /* The pile you are looking at survives a reload and a Back out of a posting. */
 function syncUrl() {
   const params = new URLSearchParams({ status: state.status });
+  if (state.source) params.set("source", state.source);
   history.replaceState(history.state, "", `?${params}`);
 }
 
 function applyUrl() {
-  const status = new URLSearchParams(location.search).get("status");
+  const url = new URLSearchParams(location.search);
+  const status = url.get("status");
   if (status && document.querySelector(`#status-tabs button[data-status="${CSS.escape(status)}"]`)) {
     selectStatus(status, { reload: false });
+  }
+  const select = document.getElementById("source-select");
+  const source = url.get("source");
+  if (source && select.querySelector(`option[value="${CSS.escape(source)}"]`)) {
+    select.value = source;
+    state.source = source;
   }
 }
 
@@ -138,34 +178,40 @@ async function loadJobs({ append = false } = {}) {
   render(data.has_more);
 }
 
-/* One row: the score, the title, four facts, two buttons.
+/* One row: the score, the title, the facts, two buttons.
 
-   The two links are the two questions a row gets asked. The title opens the
-   posting **on the board** — that is what this tool is for, and an internal
-   copy of an ad is a page nobody wants — and the score opens the detail page,
-   because "why 72?" is a question about the number and the number is where you
-   would click to ask it. */
+   The title opens the posting **on the board** — that is what this tool is
+   for, and an internal copy of an ad is a page nobody wants. The score opens
+   nothing: it toggles its own breakdown open in place, the same disclosure
+   `jobCard` already draws on the dashboard, because "why 72?" is a question
+   about the number and does not deserve a whole screen to answer.
+
+   The facts are `jobMeta` + `keyFacts` from app.js, which is what the dashboard
+   card already draws, so the two lists cannot word the same job differently.
+   This row used to fold everything into one grey dot-separated string, and the
+   fact it buried is the one this list is read for: whether the job is remote.
+   A mode chip says "Remote", "On-site", "Hybrid" or "Mode unknown" — which on
+   Profesia, where the column is scraped out of ad copy, is often the honest
+   answer and is still better than silence. */
 function simpleRow(job) {
-  const facts = [
-    job.company || "company not named",
-    job.location,
-    job.posted_display,
-    job.salary_display,
-  ].filter(Boolean);
   return `
     <article class="job simple" data-id="${job.id}" tabindex="-1">
       <div class="score-cell">
-        <a class="score ${scoreClass(job.match_score)}" href="/jobs/${job.id}"
-           title="How this score was worked out"
-           aria-label="${esc(scoreLabel(job))}">${scoreText(job.match_score)}</a>
+        <button type="button" class="score ${scoreClass(job.match_score)}"
+                aria-expanded="false" aria-controls="bd-${job.id}"
+                aria-label="${esc(scoreLabel(job))}">${scoreText(job.match_score)}</button>
       </div>
       <div class="job-main">
         <a class="title" href="${esc(job.link)}" target="_blank" rel="noopener">${esc(job.title)}
           <span class="out-mark" aria-hidden="true">↗</span>
           <span class="sr-only">— opens on ${esc(job.source_label)}</span></a>
-        <div class="meta"${job.posted_exact ? ` title="Posted ${esc(job.posted_exact)}"` : ""}>${esc(facts.join(" · "))}</div>
+        ${job.entry_label ? `<span class="tag entry">${esc(job.entry_label)}</span>` : ""}
+        <div class="meta"${job.posted_exact ? ` title="Posted ${esc(job.posted_exact)}"` : ""}>${jobMeta(job)}</div>
+        ${keyFacts(job)}
       </div>
       <div class="actions">${jobActions(job)}</div>
+      <div class="breakdown" id="bd-${job.id}" hidden>${
+        breakdownPanel(job.score_breakdown, { ineligibleLabel: job.ineligible_label })}</div>
     </article>`;
 }
 
@@ -177,6 +223,8 @@ function render(hasMore) {
     ? `${plural(state.total, "job")}${state.jobs.length < state.total
         ? ` · showing the first ${state.jobs.length}` : ""}`
     : "";
+
+  renderSweep();
 
   if (!state.jobs.length) {
     list.innerHTML = `<div class="empty">`
@@ -201,12 +249,81 @@ async function setStatus(jobId, status, btn) {
   try {
     await api(`/api/jobs/${jobId}/status`, { json: { status } });
     toast(status === "applied" ? "Added to your tracker." : "Updated.");
+    // One row moved by hand ends the last sweep's undo: the receipt described a
+    // pile that no longer exists, and restoring it would now pull this job back
+    // out of the status just chosen for it.
+    sweep.undo = [];
     await loadJobs();
   } catch (err) {
     toast(err.message);
     if (btn) btn.disabled = false;
   }
 }
+
+/* ── Declining the rest ───────────────────────────────────
+
+   A pass down this list is "applied, applied, no, no, no, no…", and the noes
+   are most of it. One button says them all at once — every unmarked row in the
+   pile, not just the ones on screen, because a pile is not the first 50 of
+   itself and the server sweeps what the *filters* select.
+
+   Two clicks, never one: it is the only control here that moves rows you have
+   not looked at. And it leaves a receipt — the ids the server answered with —
+   so Undo puts back exactly those and nothing a later click has touched. */
+
+const sweep = { armed: false, undo: [] };
+
+function renderSweep() {
+  const row = document.getElementById("sweep-row");
+  if (sweep.undo.length) {
+    row.hidden = false;
+    row.innerHTML = `<span class="hint">${plural(sweep.undo.length, "job")} declined.</span>
+      <button type="button" class="btn small ghost" data-sweep="undo">Undo</button>`;
+    return;
+  }
+  // Only the pile you have not triaged yet: "the rest" of Applied is nothing,
+  // and "the rest" of Declined is already declined.
+  row.hidden = state.status !== "new" || !state.total;
+  if (row.hidden) { row.innerHTML = ""; return; }
+
+  const unseen = state.total - state.jobs.length;
+  row.innerHTML = sweep.armed
+    ? `<button type="button" class="btn small" data-sweep="go">Decline all ${state.total}</button>
+       <button type="button" class="btn small ghost" data-sweep="cancel">Cancel</button>
+       <span class="hint">${unseen > 0
+            ? `Including the ${unseen} below the ones loaded.` : "The whole pile."}</span>`
+    : `<button type="button" class="btn small ghost" data-sweep="arm">Decline the rest</button>
+       <span class="hint">${plural(state.total, "job")} you have not marked.</span>`;
+}
+
+document.getElementById("sweep-row").addEventListener("click", async (e) => {
+  const act = e.target.closest("button[data-sweep]")?.dataset.sweep;
+  if (!act) return;
+  if (act === "arm" || act === "cancel") {
+    sweep.armed = act === "arm";
+    renderSweep();
+    return;
+  }
+  e.target.disabled = true;
+  try {
+    if (act === "go") {
+      // The same query string the list was built from, so the server sweeps
+      // exactly the pile that was on the page.
+      const data = await api(`/api/jobs/decline-rest?${currentParams()}`, { json: {} });
+      sweep.armed = false;
+      sweep.undo = data.ids || [];
+      toast(`Declined ${plural(data.declined, "job")}.`);
+    } else if (act === "undo") {
+      const data = await api("/api/jobs/restore", { json: { ids: sweep.undo } });
+      sweep.undo = [];
+      toast(`Restored ${plural(data.restored, "job")}.`);
+    }
+    await loadJobs();
+  } catch (err) {
+    e.target.disabled = false;
+    toast(err.message);
+  }
+});
 
 list.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-act]");
@@ -221,12 +338,19 @@ function selectStatus(value, { reload = true } = {}) {
     b.setAttribute("aria-pressed", on ? "true" : "false");
   });
   state.status = value;
+  sweep.armed = false;
+  sweep.undo = [];
   if (reload) { syncUrl(); loadJobs(); }
 }
 
 document.getElementById("status-tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button");
   if (btn) selectStatus(btn.dataset.status);
+});
+document.getElementById("source-select").addEventListener("change", (e) => {
+  state.source = e.target.value;
+  syncUrl();
+  loadJobs();
 });
 document.getElementById("btn-more").addEventListener("click", () => loadJobs({ append: true }));
 window.onScanFinished = () => loadJobs();
@@ -271,6 +395,11 @@ document.addEventListener("keydown", (e) => {
     case "d":
       if (job) { e.preventDefault(); setStatus(job.id, "declined"); }
       break;
+    case "s": {
+      const scoreBtn = list.querySelector(`.job.cursor button.score`);
+      if (scoreBtn) { e.preventDefault(); toggleBreakdown(scoreBtn); }
+      break;
+    }
     case "Enter":
       // The board, not the detail page: Enter is the shortcut for the thing the
       // title does, and the title goes out.

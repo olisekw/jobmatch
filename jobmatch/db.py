@@ -129,6 +129,10 @@ jobs = Table(
     Column("worktype", Text),
     Column("seniority", Text),
     Column("employment_type", Text),
+    # A numeric years-of-experience requirement read out of the description —
+    # a higher-precision signal than `seniority` above, which is why
+    # `scoring.ineligible` is allowed to read this one and not that one.
+    Column("experience_years", Integer),
     Column("scraped_at", Text, nullable=False, server_default=NOW),
     Column("posted_at", Text),
     Column("salary_min", Float),
@@ -786,6 +790,9 @@ def get_user_prefs(conn, user_id):
         # thousand jobs should not re-read the vocabulary a thousand times.
         "disciplines": scoring.user_disciplines(s["search_terms"]),
         "skills": {str(x).strip().lower() for x in s["user_skills"] if str(x).strip()},
+        # The stacks next to those, expanded once here like `reachable` above
+        # and for the same reason — see `scoring.adjacent_skills`.
+        "near_skills": scoring.adjacent_skills(s["user_skills"]),
         "seniority_strict": bool(s["seniority_strict"]),
         "strict_match": bool(s["strict_match"]),
     }

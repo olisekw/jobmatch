@@ -7,7 +7,7 @@ Scans Slovak and international job boards on a schedule, scores every posting
 ![](https://img.shields.io/badge/backend-Flask-black)
 ![](https://img.shields.io/badge/storage-Postgres%20%2F%20SQLite-black)
 ![](https://img.shields.io/badge/deploy-Docker%20Compose%20%2B%20Caddy-black)
-![](https://img.shields.io/badge/tests-216-black)
+![](https://img.shields.io/badge/tests-653-black)
 
 <picture>
   <source srcset="static/screens/jobs-dark.png" media="(prefers-color-scheme: dark)">
@@ -58,11 +58,10 @@ Scans Slovak and international job boards on a schedule, scores every posting
 - **Reads your CV** — drop a PDF in Settings; skills are extracted and merged
   into your profile, and everything is re-scored.
 - **Tracks applications** — mark a job Applied and it enters the tracker:
-  applied date, status pipeline (applied → interview → offer / rejected /
-  withdrawn / no response), inline notes, and a full status-change history.
-  The counts across the top **are** the filter — click *Waiting to hear*,
-  *Interviews* or *Offers* to see only those, and the tab you are on lives in
-  the URL, so "my offers" is a bookmark.
+  applied date and status pipeline (applied → interview → offer / rejected /
+  withdrawn / no response). The counts across the top **are** the filter —
+  click *Waiting to hear*, *Interviews* or *Offers* to see only those, and the
+  tab you are on lives in the URL, so "my offers" is a bookmark.
 - **Emails you the new matches** — an optional digest of what the overnight
   scan turned up, best score first, at most one every `DIGEST_INTERVAL_HOURS`.
   A job is mailed **once**: what went out is recorded per row, so a re-score or
@@ -81,21 +80,14 @@ Scans Slovak and international job boards on a schedule, scores every posting
 </td>
 <td width="50%">
 <picture>
-  <source srcset="static/screens/job-dark.png" media="(prefers-color-scheme: dark)">
-  <img src="static/screens/job.png" alt="A job detail page with the full
-       description and the score broken into four labelled bars.">
+  <source srcset="static/screens/tracker-dark.png" media="(prefers-color-scheme: dark)">
+  <img src="static/screens/tracker.png" alt="The tracker: one row per
+       application, with its status and date.">
 </picture>
 </td>
 </tr>
 <tr>
-<td width="50%">
-<picture>
-  <source srcset="static/screens/tracker-dark.png" media="(prefers-color-scheme: dark)">
-  <img src="static/screens/tracker.png" alt="The tracker: one row per
-       application, with its status, date and notes.">
-</picture>
-</td>
-<td width="50%">
+<td colspan="2">
 <picture>
   <source srcset="static/screens/settings-dark.png" media="(prefers-color-scheme: dark)">
   <img src="static/screens/settings.png" alt="Settings: the five weight
@@ -169,12 +161,16 @@ python3 app.py                     # → http://127.0.0.1:8000
 ```
 
 That also runs the scan worker in the same process, which is what you want
-locally. Create the first account — it becomes the instance admin, the only
-role allowed to trigger the shared crawl:
+locally. Everything — the database, the CV, every score — stays in `data/` on
+this machine; nobody else's instance sees it. Open the URL and sign up: the
+first account on a fresh database becomes that instance's admin, the only
+role allowed to trigger the shared crawl. (`python3 -m jobmatch.setpassword
+you@example.com` does the same thing from a terminal instead, which is what a
+server without a browser in front of it uses.)
 
-```bash
-python3 -m jobmatch.setpassword you@example.com
-```
+The first scan takes a few minutes by design — Profesia and Kariéra are
+crawled with 5–16s politeness delays between pages — so an empty Jobs page
+for the first few minutes is normal, not stuck.
 
 A deployment runs the two halves separately, so the web tier can be several
 processes while exactly one of them scrapes:
@@ -190,7 +186,7 @@ which documents every variable, and [`DEPLOY.md`](DEPLOY.md) for the box.
 ### Other commands
 
 ```bash
-python3 -m pytest tests/           # 513 tests (12 skip without a Postgres server)
+python3 -m pytest tests/           # 653 tests (12 skip without a Postgres server)
 python3 -m jobmatch.backfill       # idempotent schema backfill + one-time migrations
 python3 -m jobmatch.reextract      # replay extraction over stored rows after a pattern fix
 python3 -m jobmatch.demo           # create or re-seed the public demo account
@@ -221,9 +217,8 @@ failure that matters — the web container up while Postgres is not.
 |---|---|
 | **Landing** (`/`, logged out) | What it does, the scoring formula, screenshots, and one button into the demo |
 | **Dashboard** | Stat cards, last-scan summary, scan button, top matches |
-| **Jobs** | Every offer with a score you can open into its components, filters (status / min-score slider / text / **work mode** / **country** / **posted age** / **pay** / source / sort incl. best pay), Apply · Decline · Restore, "Load more" paging, and keyboard triage (`j`/`k`, `a`/`d`, `s`, `/`) |
-| **Job** | One posting in full: the scraped description, the score broken down, the skills found in it, and a link out to the board |
-| **Tracker** | Clickable counts that filter the table (everything / waiting to hear / interviews / offers / rejected / withdrawn, deep-linked as `#offer`), status dropdown, notes, event history |
+| **Jobs** | Every offer with a score you can open into its components in place, a title that links straight to the board, Apply · Decline · Restore, "Load more" paging, and keyboard triage (`j`/`k`, `a`/`d`, `s`, Enter) |
+| **Tracker** | Clickable counts that filter the table (everything / waiting to hear / interviews / offers / rejected / withdrawn, deep-linked as `#offer`), status dropdown |
 | **Settings** | CV upload, profile (location / where you can work / seniority / worktype / skills), score weights, match threshold, search terms & presets, board toggles, scan window, and the email digest on/off |
 
 Black and white, light and dark, no front-end framework — the JavaScript is one
@@ -366,3 +361,7 @@ deploy/                 Caddyfile, backup.sh, backup-pull.sh, restore-check.sh
 - The database is the single source of truth and is gitignored. Locally that is
   `data/jobmatch.db`; on the box it is Postgres in a container with a nightly
   dump. Back it up if you care about your tracker history.
+
+## License
+
+[MIT](LICENSE)

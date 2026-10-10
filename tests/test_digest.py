@@ -162,17 +162,16 @@ class ContentTests(DigestTestCase):
         digest.send_due(self.conn)
         self.assertNotIn("Mystery role", self.mailbox.last["text"])
 
-    def test_jobs_link_into_the_app_when_it_has_an_address(self):
-        user_id = self.user_with_matches(count=1)
-        job_id = self.conn.scalar(
-            "SELECT job_id FROM user_jobs WHERE user_id = :u", {"u": user_id}
-        )
+    def test_a_job_links_to_its_own_board_with_a_public_address(self):
+        """There is no internal job page to link to instead — `job_url` hands
+        back the posting's own link even when the instance has an address."""
+        self.user_with_matches(count=1)
         digest.send_due(self.conn)
-        self.assertIn(f"{BASE_URL}/jobs/{job_id}", self.mailbox.last["text"])
-        self.assertIn(f"{BASE_URL}/jobs/{job_id}", self.mailbox.last["html"])
+        self.assertIn("http://x/Python developer 0", self.mailbox.last["text"])
+        self.assertNotIn(f"{BASE_URL}/jobs", self.mailbox.last["text"])
 
-    def test_without_a_public_address_it_links_to_the_board(self):
-        """`http://None/jobs/12` is worse than the posting itself."""
+    def test_a_job_links_to_its_own_board_without_one(self):
+        """`http://None/jobs/12` would be worse than the posting itself."""
         config.PUBLIC_BASE_URL = ""
         self.user_with_matches(count=1)
         digest.send_due(self.conn)

@@ -116,8 +116,8 @@ nav .signout {
   border-left: 1px solid var(--gray-4);
 }
 nav .signout .who {
-  font-size: 0.78rem; color: var(--on-surface-dim);
-  max-width: 15ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center;
+  color: var(--on-surface-dim);
 }
 nav .signout button {
   font: inherit; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase;
@@ -288,20 +288,18 @@ a.stat:hover .value { text-decoration: underline; text-underline-offset: 3px; }
 .score.mid { background: var(--paper); color: var(--ink); }
 .score.low { border-color: var(--gray-3); color: var(--gray-4); }
 .score.none { border-color: var(--gray-2); color: var(--gray-3); font-weight: 400; }
-.score.big { font-size: 1.5rem; padding: 0.6rem 1.2rem; cursor: default; min-width: 5rem; }
-/* On the Jobs list the score is a link to the detail page rather than a button
-   that unfolds a panel in place, so it needs an anchor's two missing pieces:
-   `block` (an inline element ignores the width that fills the cell) and no
-   underline. Every colour rule above applies to both. */
-a.score { display: block; text-decoration: none; }
-a.score:hover { text-decoration: none; outline: 1.5px solid var(--ink); }
 
-/* The stripped row: no tags, no key-facts line, no breakdown panel — so the
-   grid loses its third row and the arrow that says "this leaves the site"
-   moves inline into the title it belongs to. */
-.job.simple { align-items: center; }
-.job.simple .out-mark { color: var(--gray-4); font-size: 0.8rem; }
-.job.simple .title:hover .out-mark { color: var(--ink); }
+/* `start`, not the `center` this row used before it grew a chip row: with two
+   lines of facts under the title, centring floated the score against the gap
+   between them instead of lining it up with the title it belongs to. */
+.job.simple { align-items: start; }
+/* Tighter than the card's row on the dashboard — in a list this sits under two
+   lines of text and does not need to breathe as much. */
+.job.simple .keyfacts { margin-top: 0.35rem; }
+/* The arrow that says "this leaves the site" rides inline inside the title it
+   belongs to, on both the Jobs list and the dashboard's top matches. */
+.job .out-mark { color: var(--gray-4); font-size: 0.8rem; }
+.job .title:hover .out-mark { color: var(--ink); }
 
 .breakdown {
   grid-column: 1 / -1;
@@ -336,11 +334,12 @@ a.score:hover { text-decoration: none; outline: 1.5px solid var(--ink); }
 
 .job .title { font-weight: 700; text-decoration: none; }
 .job .title:hover { text-decoration: underline; }
-.job .out, .tracker-table .out {
+/* The tracker still links out from its own column rather than from a title. */
+.tracker-table .out {
   text-decoration: none; color: var(--gray-4);
   font-size: 0.85rem; padding: 0 0.3rem;
 }
-.job .out:hover, .tracker-table .out:hover { color: var(--ink); }
+.tracker-table .out:hover { color: var(--ink); }
 .job .meta { color: var(--gray-4); font-size: 0.85rem; margin-top: 0.15rem; }
 .job .tags { margin-top: 0.45rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
 
@@ -362,7 +361,6 @@ a.score:hover { text-decoration: none; outline: 1.5px solid var(--ink); }
 .keyfact.mode.remote { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .keyfact.place { border-color: var(--gray-3); font-weight: 500; }
 .keyfact.none { border-color: var(--gray-2); color: var(--gray-4); font-weight: 400; }
-.detail-head .keyfacts { margin-bottom: 0.6rem; }
 
 .tag {
   font-size: 0.7rem;
@@ -383,34 +381,19 @@ a.score:hover { text-decoration: none; outline: 1.5px solid var(--ink); }
 
 .more-row { display: flex; align-items: center; gap: 1rem; padding: 1.5rem 0; }
 
-/* ── Job detail ──────────────────────────────────────── */
-.crumb { margin-bottom: 1.2rem; font-size: 0.85rem; }
-.crumb a { color: var(--gray-4); text-decoration: none; }
-.crumb a:hover { color: var(--ink); }
+/* The end-of-pass sweep, under the list because that is where a pass ends.
+   Boxed and set apart: it moves every row in the pile at once, so it must not
+   read as a third row-level button that happens to have scrolled to the end. */
+.sweep-row {
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  padding: 0.9rem 1rem; border: 1px solid var(--gray-3);
+}
+.sweep-row .hint { margin: 0; }
 
-.detail-head {
-  display: flex; gap: 2rem; align-items: start; justify-content: space-between;
-  padding-bottom: 1.4rem; border-bottom: 2px solid var(--ink);
-}
-.detail-head .subtitle { margin-bottom: 0.8rem; }
-.detail-head .tags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.detail-score { text-align: center; flex: none; }
-.detail-score .hint {
-  text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.4rem;
-}
-.detail-actions {
-  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-  padding: 1.2rem 0;
-}
-.detail-actions .actions { display: flex; gap: 0.5rem; }
-
-/* Descriptions are stored as one plain-text block (the scrapers strip the
-   board's markup), so readability here is line length and spacing. */
-.description {
-  max-width: 68ch;
-  white-space: pre-wrap;
-  line-height: 1.7;
-}
+/* The opening being hunted — an internship, a graduate programme, a working
+   student post. Inked like the other facts a list is read for, because this
+   one is the reason the row is on the page at all. */
+.tag.entry { border-color: var(--ink); color: var(--ink); font-weight: 600; }
 
 /* ── Filter bar ──────────────────────────────────────── */
 .filters {
@@ -454,6 +437,8 @@ a.score:hover { text-decoration: none; outline: 1.5px solid var(--ink); }
 }
 .filters input[type="text"] { width: 200px; }
 
+.list-controls { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+
 .tabs { display: flex; border: 1px solid var(--ink); }
 .tabs button {
   font: inherit; font-size: 0.8rem; font-weight: 600;
@@ -480,7 +465,6 @@ a.score:hover { text-decoration: none; outline: 1.5px solid var(--ink); }
 .sk-line { height: 0.8rem; width: 100%; }
 .sk-line.short { width: 30%; }
 .sk-line.tags { width: 45%; height: 0.7rem; }
-.detail-skeleton { display: flex; flex-direction: column; gap: 0.8rem; max-width: 40rem; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) {
   .sk, .pulse { animation: none; }
@@ -516,11 +500,8 @@ td { padding: 0.85rem 0.75rem; border-bottom: 1px solid var(--gray-2); vertical-
    narrow enough to break them apart makes the arrow look like a stray. */
 .tracker-table .title { display: inline; }
 .tracker-table td[data-label="Company"] { font-size: 0.9rem; }
-tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9rem 1.2rem; }
 
 .status-select { font-size: 0.82rem; padding: 0.3rem 0.5rem; }
-.notes-input { font-size: 0.85rem; border-color: var(--gray-2); }
-.notes-input:hover { border-color: var(--gray-3); }
 
 /* ── Settings ────────────────────────────────────────── */
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.2rem; }
@@ -798,9 +779,6 @@ tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9re
   .tabs { width: 100%; }
   .tabs button { flex: 1; padding: 0.45rem 0.5rem; }
 
-  .detail-head { flex-direction: column; gap: 1rem; }
-  .detail-score { display: flex; align-items: baseline; gap: 0.8rem; text-align: left; }
-
   .tracker-table thead { display: none; }
   .tracker-table, .tracker-table tbody, .tracker-table tr, .tracker-table td { display: block; }
   .tracker-table tr[data-id] {
@@ -820,8 +798,4 @@ tr.events-row td { background: var(--gray-1); font-size: 0.82rem; padding: 0.9re
     color: var(--gray-4); font-weight: 600;
   }
   .tracker-table td > input, .tracker-table td > select { flex: 1; min-width: 8rem; }
-  .tracker-table td[data-label=""] { display: block; }
-  .tracker-table tr.events-row { margin: -0.5rem 0 0.8rem; }
-  .tracker-table tr.events-row td { display: block; padding: 0.9rem; }
-  .tracker-table tr.events-row td::before { content: none; }
 }

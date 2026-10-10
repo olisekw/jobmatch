@@ -3,7 +3,52 @@
 One line per change, newest first. The `/roadmap-task` skill appends a sentence here after
 each completed roadmap task. The plan lives in `ROADMAP.md`; the rationale in `PROJECT.md`.
 
+## 2026-10-04
+- **The first real list, and the three ways it was wrong.** Twelve matches on Oliver's own
+  settings: three senior titles, four student ads for a shop floor and an assembly line, and
+  nothing anywhere saying whether a job was remote. Every cause was already in the code. (1)
+  `strict_match` was off, so `ineligible` had been answering "could he take this at all" into
+  the void — on with the terms below. (2) The entry-level push-through handed any "študent"
+  title the generic rung so the field test could not cut it; it is gone, because the brief is
+  coding jobs and no vocabulary of other trades can catch a title that never says what the
+  work is ("hľadáme študentov do tímov"). The openings actually wanted lose nothing — they
+  name the trade — and `entry_level` keeps the row's tag. (3) `_reachable` and
+  `_location_component` read different evidence, so the Bratislava job `ineligible` wanted to
+  throw away was scoring a *perfect* 1.0 location; they are now one `scoring.reach` with three
+  answers, the middle one (`REACH_CLAIMED`) being an ad that claims remote from another Slovak
+  town — half a location, ranked under certain work, never cut. Plus `MISSION.md`'s Angular
+  sentence, finally implemented: `config.SKILL_ADJACENCY` gives the role ladder a rung under
+  his own stack (`ROLE_ADJACENT`) and the skills component half-credit for a requirement he
+  could pick up, and `user_disciplines` infers `fullstack` from frontend + backend, which is
+  why "senior full stack developer" had been reading as somebody else's job. The Jobs list now
+  draws `jobMeta` + `keyFacts` like the dashboard card, so each row carries a pay, work-mode
+  and country chip instead of one grey dot-separated string — the mode is the fact that list
+  is read for. Measured after: the seven non-coding rows are all `field` cuts at 0.0, both
+  senior roles are `level` cuts, and the claimed-remote Bratislava job sits at 46 with a 0.5
+  location. 653 tests.
+
 ## 2026-10-03
+- **The two simple filters, and the button at the end of the list.** A title saying "student",
+  "graduate", "internship", "trainee" or "absolvent" now shares the role ladder's last rung with
+  `ROLE_GENERIC` (`scoring.entry_level`), which is what pushes it past `ineligible`'s field test —
+  those titles routinely name no trade at all, so a title-only reading could only call them
+  somebody else's profession. The brake is that the rung is asked *after* `ROLE_OTHER_FIELDS`,
+  and the live pool proved the brake needed widening: all 19 "študent" titles in the 94-row
+  review pile were a Nike shop floor, a law firm, a recruitment team or an assistant's desk, so
+  seven words went into that vocabulary and the false matches over threshold fell 14 → 7. Plain
+  "junior" is deliberately not an entry word — it states a rung, which is the seniority
+  component's question. That component now reads the title first too (`scoring.job_level`), as
+  does the `seniority_strict` gate, because gating on prose while scoring on the title zeroed the
+  graduate advert it had just scored 1.0; the *cut* still demands title-grade evidence, since the
+  extracted column is good enough to rank a job with and not to hide one. Second half:
+  `POST /api/jobs/decline-rest` ends a triage pass in one click — it reuses the list's own
+  `_job_filters()`, so it sweeps exactly the pile on the page including the rows past "Load
+  more", it can only ever move `new` rows (an applied job cannot be lost to it), and it hands
+  back the ids so `POST /api/jobs/restore` can undo it without a table to remember the sweep in.
+  Exercised in a browser against a copy of the live DB: 7 swept, 7 restored, the 7 applied
+  untouched. 611 tests, and `ScanWindowTests` is green again — it patched `scan.SOURCES` without
+  `scan.get_enabled`, so its fake board was never asked.
+
 - **The list was full of jobs Oliver cannot take, and a score could not say so.** Of 245 fresh
   Profesia postings, 96 — a receptionist, a toolmaker, a junior project manager, an insurance
   intern — sat at exactly 37.6 on a frontend developer's list, above his threshold, because the
@@ -32,9 +77,9 @@ each completed roadmap task. The plan lives in `ROADMAP.md`; the rationale in `P
   slot", and nothing ever went back for the row already in the table. `backfill.demote_ghost_admin`
   demotes a passwordless admin whenever a real one exists — never the last one, since an unowned
   instance stops scanning — and demotes rather than deletes, because those `user_jobs` rows are the
-  single-user era's triage history. Applied to the live DB: the crawl now runs on
-  `[redacted-email]`'s settings, whose board list was carried over from the ghost's so the
-  shared pool did not narrow from seven boards to one.
+  single-user era's triage history. Applied to the live DB: the crawl now runs on the real admin's
+  settings, whose board list was carried over from the ghost's so the shared pool did not narrow
+  from seven boards to one.
 
 - **A `.env` that cannot be read is now loud** — `config.py` catches python-dotenv's ImportError so
   a missing convenience dependency cannot break startup, which was right, but it was also silent:

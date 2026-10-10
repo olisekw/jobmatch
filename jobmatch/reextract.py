@@ -29,7 +29,7 @@ from . import db, extract, places, scoring
 from .sources import SOURCES
 
 # Columns this tool can recompute, mapped to their `extract_all` key.
-FIELDS = ("skills", "worktype", "seniority", "employment_type")
+FIELDS = ("skills", "worktype", "seniority", "employment_type", "experience_years")
 
 
 def _status_counts(conn):
@@ -45,12 +45,13 @@ def _status_counts(conn):
 def _recompute(conn):
     """Return (updates, changes) without writing anything.
 
-    `updates` is a list of (skills, worktype, seniority, employment_type, id)
-    for rows that actually differ; `changes` counts transitions per field.
+    `updates` is a list of (skills, worktype, seniority, employment_type,
+    experience_years, id) for rows that actually differ; `changes` counts
+    transitions per field.
     """
     rows = conn.execute(
-        "SELECT id, source, description, skills, worktype, seniority, employment_type "
-        "FROM jobs WHERE TRIM(COALESCE(description, '')) != ''"
+        "SELECT id, source, description, skills, worktype, seniority, employment_type, "
+        "experience_years FROM jobs WHERE TRIM(COALESCE(description, '')) != ''"
     ).fetchall()
 
     updates, changes = [], {field: Counter() for field in FIELDS}
@@ -152,7 +153,8 @@ def main(argv=None):
 
     conn.executemany(
         "UPDATE jobs SET skills = :skills, worktype = :worktype, "
-        "seniority = :seniority, employment_type = :employment_type WHERE id = :id",
+        "seniority = :seniority, employment_type = :employment_type, "
+        "experience_years = :experience_years WHERE id = :id",
         updates,
     )
     conn.executemany(

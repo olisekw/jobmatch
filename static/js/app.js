@@ -337,8 +337,7 @@ const CARD_SKILLS = 4;   // how many skill pills a row shows before counting
 function jobCard(job, { actions = true, skills = true } = {}) {
   // Eight pills was a second grey paragraph per row and 200 of them on a page.
   // Four plus a count keeps the shape of the answer — "it names things you
-  // have, and more than fit" — and the whole list is one Enter away, on the
-  // detail page's own "Skills found in this posting" panel.
+  // have, and more than fit" — without a full list of what did not.
   const found = skills
     ? (job.skills || "").split(",").map(s => s.trim()).filter(Boolean) : [];
   const extra = found.length - CARD_SKILLS;
@@ -353,9 +352,9 @@ function jobCard(job, { actions = true, skills = true } = {}) {
                 aria-label="${esc(scoreLabel(job))}">${scoreText(job.match_score)}</button>
       </div>
       <div class="job-main">
-        <a class="title" href="/jobs/${job.id}">${esc(job.title)}</a>
-        <a class="out" href="${esc(job.link)}" target="_blank" rel="noopener"
-           aria-label="Open this posting on ${esc(job.source_label)}">↗</a>
+        <a class="title" href="${esc(job.link)}" target="_blank" rel="noopener">${esc(job.title)}
+          <span class="out-mark" aria-hidden="true">↗</span>
+          <span class="sr-only">— opens on ${esc(job.source_label)}</span></a>
         <div class="meta"${job.posted_exact ? ` title="Posted ${esc(job.posted_exact)}"` : ""}>${jobMeta(job)}</div>
         ${keyFacts(job)}
         <div class="tags">${factTags(job)}${skillTags}</div>

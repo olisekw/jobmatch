@@ -241,11 +241,8 @@ class WholeLoopTests(EndToEndTestCase):
         self.assertEqual(stats["matched"], 1, "one of the two is above the threshold")
         self.assertEqual(stats["unscored"], 0, "both descriptions arrived")
 
-        # 7. The detail page serves the description the list deliberately omits.
+        # 7. The list deliberately omits the description — nowhere surfaces it.
         self.assertNotIn("description", top)
-        detail = browser.get_json(f"/api/jobs/{top['id']}")["job"]
-        self.assertIn("Django", detail["description"])
-        self.assertEqual(browser.client.get(f"/jobs/{top['id']}").status_code, 200)
 
         # 8. Applying to it opens a tracker entry — one act, two records.
         applied = browser.send("post", f"/api/jobs/{top['id']}/status",

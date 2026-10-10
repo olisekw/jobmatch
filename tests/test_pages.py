@@ -33,11 +33,12 @@ class ScoreComponentMarkupTests(AuthTestCase):
         return json.loads(payload)
 
     def test_every_signed_in_page_carries_the_list(self):
-        # The job detail page is the reason this is a template global rather than
-        # a key on `/api/settings`: it draws the breakdown without ever asking
-        # for settings, so a list behind that route would cost it a request.
-        job_id = self.add_job("Python developer")
-        for path in ("/", "/jobs", f"/jobs/{job_id}", "/tracker", "/settings"):
+        # The inline breakdown toggle on the dashboard and the Jobs list is the
+        # reason this is a template global rather than a key on `/api/settings`:
+        # it draws without ever asking for settings, so a list behind that
+        # route would cost every row's toggle a request.
+        self.add_job("Python developer")
+        for path in ("/", "/jobs", "/tracker", "/settings"):
             with self.subTest(path=path):
                 self.assertEqual(
                     self.components_on(path), display.score_components(),

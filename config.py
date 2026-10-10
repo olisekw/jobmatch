@@ -404,6 +404,56 @@ SENIORITY_PATTERNS = {
     ],
 }
 
+# A numeric years-of-experience requirement, read separately from the word-based
+# `SENIORITY_PATTERNS` above: a specific number ("5+ years", "minimálne 5 rokov
+# praxe") is a much higher-precision signal than a categorical word like
+# "senior", which also matches prose with nothing to do with the role's level
+# ("a leading Slovak company"). Each pattern must capture the number in group 1.
+# Slovak/Czech forms spell their diacritics out, same as `SENIORITY_PATTERNS`:
+# this text is only lower-cased before matching, never diacritic-stripped.
+#
+# Order matters: `extract.extract_experience_years` blanks out each pattern's
+# matches before trying the next, so a range ("3-5 years") must be listed
+# before the bare "N years ... experience" pattern below it — otherwise the
+# bare one would also match the "5" inside "3-5" and the range's own lower
+# bound would be lost to the higher number it was deliberately avoiding.
+EXPERIENCE_YEARS_PATTERNS = [
+    # "3-5 years of experience" — the lower bound is the stated minimum
+    r'\b(\d+)\s*[-–]\s*\d+\s*years?\s*(?:of\s*)?experience\b',
+    # "5+ years", "5+ years of experience", "5+ years' experience" — but not
+    # a client or company's own tenure ("With 20+ years of proven success",
+    # "clients have been with us for 7+ years"), which the live pool showed
+    # using this exact bare "N+ years" shape just as often as a candidate
+    # requirement does.
+    r'\b(\d+)\+\s*years?\b(?!\s*(?:of\s+(?:proven\s+)?(?:success|history|innovation)'
+    r'|,?\s*and\b))',
+    # "minimum 5 years of experience", "at least 5 years experience" — the
+    # qualifier alone is not enough: "at least 18 years old" is an age
+    # requirement, not an experience one, so "experience" must follow.
+    r'\b(?:minimum|min\.?|at least)\s*(\d+)\s*years?\s*(?:of\s*)?(?:relevant\s*)?experience\b',
+    # Deliberately no bare "N years ... experience" pattern with no qualifier
+    # at all: live postings use that exact shape to describe the *company's*
+    # history ("Sisecam, who has 88 years of experience") at least as often as
+    # a candidate requirement, and every genuine English requirement found in
+    # the live pool carried an explicit "+", "minimum" or "at least" anchor.
+    # "3-5 rokov praxe" — the lower bound
+    r'\b(\d+)\s*[-–]\s*\d+\s*rok(?:y|ov|ů)?\s*(?:praxe|prax\w*|skúsenost\w*|zkušenost\w*)',
+    # "zkušenosti alespoň 4 roky", "prax minimálne 5 rokov" — the noun first,
+    # the qualifier and number after it
+    r'\b(?:praxe|prax\w*|skúsenost\w*|zkušenost\w*)\s+'
+    r'(?:minimálne|min\.?|aspoň|najmenej|minimálně|alespoň|nejméně)?\s*(\d+)\+?\s*rok',
+    # "5+ rokov praxe", "min. 5 rokov praxe", "min. 4 roky zkušeností" — the
+    # number first, the noun after it
+    r'\b(?:minimálne|min\.?|aspoň|najmenej|minimálně|alespoň|nejméně)?\s*(\d+)\+?\s*rok(?:y|ov|ů)?\s*'
+    r'(?:praxe|prax\w*|skúsenost\w*|zkušenost\w*)',
+]
+
+# The lowest years count that implies each level — highest threshold met wins.
+# Below the lowest key, a years figure says nothing about level on its own
+# (the existing junior "0-2 roky" shape is read by `SENIORITY_PATTERNS`, not
+# this table).
+EXPERIENCE_YEARS_LEVEL = {3: "medior", 5: "senior"}
+
 EMPTYPE_PATTERNS = {
     # The Slovak noun is "úväzok" (with ä); boards that strip diacritics emit
     # "uvazok". Both spellings, and any case ending, are matched via [úu]v[äa]z\w*
@@ -540,6 +590,23 @@ ROLE_OTHER_FIELDS = [
     "call centre", "call center", "operator", "operatorka", "predavac",
     "accountant", "uctovnik", "payroll", "hr", "human resources", "recruiter",
     "personalist", "insurance", "poistovaci", "advokat", "pravnik",
+    # Caught by the entry-level rung and not by anything above it. A title
+    # saying "študent" earns a rung now (see `scoring._role_component`), so the
+    # trades the brigade ads are actually for have to be named or they ride in
+    # on the word: a Nike shop floor in Eurovea, a law firm's filing, a
+    # recruitment team, a company assistant's desk. "predaj" and "pokladn"
+    # cover the shop-counter spellings the way "sklad" already covers the
+    # warehouse ones, and "pravn" the adjective that "pravnik" misses.
+    "predaj", "pokladn", "pravn", "naborov", "asistent", "assistant",
+    "finance analyst", "financny analytik",
+    # Reached through ROLE_GENERIC's "engineer"/"inžinier" and nothing else, so
+    # named here or they ride in on it: a *mechano inžinier* for building
+    # services (TZB), a quality engineer, an IP network post. "kvality" is one
+    # word on purpose — "inžinier/ka kvality" defeats a two-word phrase — and
+    # it is safe where a bare "quality" would not be, because a QA title is
+    # matched on the qa discipline two rungs earlier and never arrives here.
+    # "network" stays a phrase for the same reason "process" does.
+    "kvality", "mechano", "tzb", "network engineer", "network solution",
     # Care, trade and transport
     "zdravotn", "opatrovate", "kuchar", "vodic", "ridic", "skladnik",
     "stavbyvedu", "murar", "elektrikar",
@@ -588,6 +655,40 @@ SK_CITIES = [
     "topolcany", "trebisov", "dubnica nad vahom", "vranov nad toplou",
     "senec", "dunajska streda", "malacky", "pezinok", "sala", "rimavska sobota",
 ]
+
+# Technologies close enough that knowing one is most of knowing the other.
+# `MISSION.md` asks for this by name — "if you're a React developer you can also
+# switch to another stack, Angular say; a job in a neighbouring technology is
+# not a miss" — and without it an Angular advert read as *generic* to a React
+# developer, the same 0.35 as a maintenance engineer, because "angular" is not
+# in any discipline's vocabulary and not in his CV.
+#
+# Groups, not a graph: within one of these, any member is adjacent to any other,
+# which is coarse and is the right amount of structure for the question being
+# asked ("could he pick this up?"). A technology may sit in two groups — kotlin
+# is beside java and beside swift — so `scoring.adjacent_skills` unions the
+# groups a skill appears in. Spelled the way a title spells them, with no bare
+# "next" (it is an ordinary English word) and no bare "net".
+SKILL_ADJACENCY = [
+    ["react", "angular", "vue", "svelte", "preact", "nextjs", "next.js", "nuxt"],
+    ["javascript", "js", "typescript", "ts"],
+    ["python", "django", "flask", "fastapi"],
+    ["node", "nodejs", "node.js", "express", "nestjs"],
+    ["css", "sass", "scss", "less", "tailwind", "bootstrap"],
+    ["sql", "postgres", "postgresql", "mysql", "mariadb", "sqlite"],
+    ["docker", "kubernetes", "k8s", "podman"],
+    ["java", "kotlin", "scala"],
+    ["c#", "csharp", ".net", "dotnet"],
+    ["php", "laravel", "symfony"],
+    ["swift", "kotlin", "flutter", "react native"],
+    ["git", "github", "gitlab", "bitbucket"],
+]
+
+# What a requirement he could pick up is worth against one he already has, in
+# the skills component. Half: an adjacent stack is a real answer to "could you
+# do this job" and a worse one than having done it, and scoring the two the
+# same would let a job asking for nothing he knows tie one asking for his CV.
+SKILL_ADJACENT_CREDIT = 0.5
 
 # How much of the job's detected skill list counts as enough evidence to trust
 # the coverage figure. A description that yielded one skill and matched it is

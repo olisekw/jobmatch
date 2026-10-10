@@ -193,23 +193,6 @@ def shoot(page, base, scheme, suffix):
         page.screenshot(path=str(out))
         print(f"  {out.relative_to(REPO)}")
 
-    # The job detail page needs an id, so it is taken from whatever the Jobs
-    # page is showing rather than hardcoded.
-    page.goto(base + "/jobs", wait_until="networkidle")
-    page.wait_for_timeout(700)
-    link = page.locator(".job .title").first
-    if link.count():
-        link.click()
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(700)
-        detail_score = page.locator(".score.big").first
-        if detail_score.count():
-            detail_score.click()
-            page.wait_for_timeout(250)
-        out = OUT_DIR / f"job{suffix}.png"
-        page.screenshot(path=str(out))
-        print(f"  {out.relative_to(REPO)}")
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

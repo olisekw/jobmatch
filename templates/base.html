@@ -20,9 +20,19 @@
       <a href="/settings" class="{{ 'active' if active == 'settings' }}" {% if active == 'settings' %}aria-current="page"{% endif %}>Settings</a>
       <form class="signout" method="post" action="{{ url_for('do_logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {# The email still reaches a reader — as a tooltip and as the accessible
+           name — it is just not sitting in the chrome as text any more; an
+           icon and a native `title` say "this is your account" with far less
+           width than an address does, and `max-width: 15ch` used to clip a
+           long one into "oliver.bujdo@g…" anyway. #}
+        <span class="who" title="{{ current_user.email }}" aria-label="Signed in as {{ current_user.email }}">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </span>
         {# A form, not a link: signing out changes state, so it is a POST and
            carries a token like every other mutation. #}
-        <span class="who" title="{{ current_user.email }}">{{ current_user.email }}</span>
         <button type="submit">Sign out</button>
       </form>
     </div>
@@ -65,9 +75,9 @@
   {# The scheduled crawl belongs to the instance, not to this tab. #}
   <script>window.CAN_SCAN = {{ 'true' if can_scan else 'false' }};</script>
   {# The five score components and their words, from `display.SCORE_COMPONENTS`.
-     Here rather than on `/api/settings` because the job detail page draws the
-     breakdown without ever asking for settings — putting the list behind that
-     route would cost it a second request for five strings. #}
+     Here rather than on `/api/settings` because `breakdownPanel` draws them
+     inline on both the dashboard and the Jobs list — putting them behind that
+     route would cost every row's toggle a second request for five strings. #}
   <script>window.SCORE_COMPONENTS = {{ score_components | tojson }};</script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   {% block scripts %}{% endblock %}

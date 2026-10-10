@@ -120,6 +120,59 @@ class SeniorityExtractionTests(unittest.TestCase):
         self.assertIsNone(extract.extract_seniority("We build web apps"))
 
 
+class ExperienceYearsExtractionTests(unittest.TestCase):
+    def test_plus_form(self):
+        self.assertEqual(
+            extract.extract_experience_years("We need 5+ years of experience"), 5)
+
+    def test_minimum_qualifier(self):
+        self.assertEqual(
+            extract.extract_experience_years("Minimum 5 years of experience required"), 5)
+
+    def test_at_least_qualifier(self):
+        self.assertEqual(
+            extract.extract_experience_years("At least 3 years experience in Python"), 3)
+
+    def test_range_takes_the_lower_bound(self):
+        # "3-5 years" states a minimum of 3, not an upper bound of 5.
+        self.assertEqual(
+            extract.extract_experience_years("3-5 years of experience wanted"), 3)
+
+    def test_highest_figure_named_wins(self):
+        self.assertEqual(
+            extract.extract_experience_years(
+                "2+ years is fine, but ideally 5+ years of commercial experience"), 5)
+
+    def test_slovak_minimalne_rokov_praxe(self):
+        self.assertEqual(
+            extract.extract_experience_years("minimálne 5 rokov praxe"), 5)
+
+    def test_slovak_rokov_skusenosti(self):
+        self.assertEqual(
+            extract.extract_experience_years("5 rokov skúseností v odbore"), 5)
+
+    def test_slovak_min_roky_praxe(self):
+        self.assertEqual(extract.extract_experience_years("min. 3 roky praxe"), 3)
+
+    def test_czech_alespon_roky_zkusenosti(self):
+        self.assertEqual(
+            extract.extract_experience_years("zkušenosti alespoň 4 roky"), 4)
+
+    def test_czech_min_roky_zkusenosti(self):
+        self.assertEqual(
+            extract.extract_experience_years("min. 4 roky zkušeností"), 4)
+
+    def test_salary_figure_is_not_a_years_figure(self):
+        self.assertIsNone(extract.extract_experience_years("Salary 5000 EUR gross"))
+
+    def test_experience_with_a_technology_is_not_a_years_figure(self):
+        self.assertIsNone(
+            extract.extract_experience_years("Experience with Docker and Kubernetes"))
+
+    def test_no_signal_is_none(self):
+        self.assertIsNone(extract.extract_experience_years("We build web apps"))
+
+
 class EmploymentTypeExtractionTests(unittest.TestCase):
     def test_english_fulltime(self):
         self.assertEqual(extract.extract_employment_type("This is a full time position"),

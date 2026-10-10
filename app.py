@@ -541,14 +541,6 @@ def page_jobs():
     return render_template("jobs.html", active="jobs")
 
 
-@app.route("/jobs/<int:job_id>")
-@login_required
-def page_job(job_id):
-    """The posting itself. The row is fetched by the page's own JSON call, so a
-    job that vanished shows this page's error state rather than a Flask 404."""
-    return render_template("job.html", active="jobs", job_id=job_id)
-
-
 @app.route("/tracker")
 @login_required
 def page_tracker():
@@ -677,6 +669,13 @@ def _job_payload(row):
     job["ineligible_label"] = display.label(
         display.INELIGIBLE, (job["score_breakdown"] or {}).get("ineligible")
     )
+    # The opening being hunted, said on the row: an internship, a graduate
+    # programme or a working-student post is the thing worth spotting in a
+    # list, and the rule that lifted it off the bottom rung is invisible
+    # otherwise. Derived here rather than stored, like every other age and
+    # label on this payload, so a vocabulary fix needs no backfill.
+    job["entry_level"] = scoring.entry_level(job["title"])
+    job["entry_label"] = display.ENTRY_LEVEL if job["entry_level"] else ""
     job["worktype_label"] = display.label(display.WORKTYPE, job["worktype"])
     job["seniority_label"] = display.label(display.SENIORITY, job["seniority"])
     job["employment_label"] = display.label(
@@ -866,42 +865,6 @@ def api_jobs():
     })
 
 
-@app.get("/api/jobs/<int:job_id>")
-@login_required
-def api_job(job_id):
-    """One job in full — including the scraped description no list ships."""
-    conn = get_db()
-    user_id = current_user_id()
-
-    def fetch():
-        return conn.execute(
-            f"""SELECT {JOB_COLUMNS}, j.description
-                FROM jobs j
-                JOIN user_jobs uj ON uj.job_id = j.id AND uj.user_id = :user_id
-                WHERE j.id = :job_id""",
-            {"user_id": user_id, "job_id": job_id},
-        ).fetchone()
-
-    row = fetch()
-    if row is None:
-        # Either the job does not exist, or this user has no `user_jobs` row for
-        # it yet — a job scanned in since they signed up. Materializing is
-        # idempotent and turns the second case into a hit, the same way
-        # `api_job_status` handles it.
-        if conn.scalar("SELECT id FROM jobs WHERE id = :job_id", {"job_id": job_id}) is None:
-            return jsonify({"error": "That job is no longer in your list."}), 404
-        db.ensure_user_jobs(conn, user_id)
-        conn.commit()
-        row = fetch()
-        if row is None:
-            return jsonify({"error": "That job is no longer in your list."}), 404
-
-    job = _job_payload(row)
-    job["scraped_display"] = display.relative_time(job["scraped_at"])
-    job["scraped_exact"] = display.exact_time(job["scraped_at"])
-    return jsonify({"job": job})
-
-
 @app.post("/api/jobs/<int:job_id>/status")
 @login_required
 def api_job_status(job_id):
@@ -944,6 +907,102 @@ def api_job_status(job_id):
             conn.execute("DELETE FROM applications WHERE id = :id", {"id": app_id})
     conn.commit()
     return jsonify({"ok": True, "status": new_status})
+
+
+# How many ids one statement may carry. sqlite caps a statement at 999 bound
+# variables by default and a sweep is routinely a few hundred jobs, so the
+# batch updates below are chunked rather than written as one enormous IN list.
+_ID_CHUNK = 400
+
+# How many ids an undo may name. The sweep hands its own ids back and the page
+# sends exactly those, so this is a ceiling on a hostile body rather than on
+# anything the UI does.
+RESTORE_LIMIT = 5000
+
+
+def _move_jobs(conn, user_id, job_ids, new_status, only_from):
+    """Move a batch of this user's jobs from one status to another.
+
+    `only_from` is what makes both callers safe and idempotent: a sweep can
+    only ever move a row out of `new`, and an undo only out of `declined`, so
+    neither can touch a job that has since been marked by hand — and a second
+    click of either changes nothing rather than doubling anything. Returns the
+    number of rows that actually moved, which is the number worth reporting.
+    """
+    moved = 0
+    for start in range(0, len(job_ids), _ID_CHUNK):
+        chunk = job_ids[start:start + _ID_CHUNK]
+        binds = {f"id{i}": job_id for i, job_id in enumerate(chunk)}
+        moved += conn.execute(
+            "UPDATE user_jobs SET status = :new_status "
+            "WHERE user_id = :user_id AND status = :only_from "
+            "AND job_id IN (" + ", ".join(f":{b}" for b in binds) + ")",
+            dict(binds, user_id=user_id, new_status=new_status,
+                 only_from=only_from),
+        ).rowcount
+    return moved
+
+
+@app.post("/api/jobs/decline-rest")
+@login_required
+def api_jobs_decline_rest():
+    """Decline everything still unmarked in the pile this list is showing.
+
+    The end of a triage pass, and the other half of the page's one real
+    gesture: you go down the list marking what you applied to, and everything
+    you did not mark is a no. Doing that one row at a time is 94 clicks and the
+    reason a review pile stops being reviewed.
+
+    "Everything" is defined by the same `_job_filters()` the list and its count
+    go through, so the sweep can only ever touch rows the page was showing —
+    including the ones past "Load more", which is the point: a pile is not the
+    first 50 of itself.
+
+    Only `new` rows move, whatever the query string asked for. A job you
+    applied to is the one thing a sweep must never be able to lose, and an
+    already-declined row has nothing to change. The ids are returned so the
+    page can offer an undo, because a one-click bulk action without one is a
+    trap.
+    """
+    conn = get_db()
+    user_id = current_user_id()
+    where, params = _job_filters()
+    job_ids = [row["job_id"] for row in conn.execute(
+        f"""SELECT uj.job_id FROM jobs j
+            JOIN user_jobs uj ON uj.job_id = j.id AND uj.user_id = :user_id
+            WHERE {where} AND uj.status = 'new'
+            ORDER BY uj.job_id""",
+        params,
+    )]
+    declined = _move_jobs(conn, user_id, job_ids, "declined", "new")
+    conn.commit()
+    return jsonify({"ok": True, "declined": declined, "ids": job_ids})
+
+
+@app.post("/api/jobs/restore")
+@login_required
+def api_jobs_restore():
+    """Put a sweep back — the undo beside it.
+
+    Takes the ids the sweep answered with rather than "the last sweep", because
+    nothing records a sweep: the ids are the receipt, and a receipt the client
+    holds needs no table. Only declined rows move, so an undo clicked twice, or
+    clicked after a job was re-applied by hand, cannot pull anything out of the
+    pile it now belongs to.
+    """
+    conn = get_db()
+    raw = (request.get_json(silent=True) or {}).get("ids")
+    if not isinstance(raw, list):
+        return jsonify({"error": "Which jobs? Send the ids the sweep answered with."}), 400
+    job_ids = []
+    for value in raw[:RESTORE_LIMIT]:
+        try:
+            job_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    restored = _move_jobs(conn, current_user_id(), job_ids, "new", "declined")
+    conn.commit()
+    return jsonify({"ok": True, "restored": restored})
 
 
 # ── Applications (tracker) ───────────────────────────────────

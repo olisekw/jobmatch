@@ -61,3 +61,56 @@ The brief above was narrowed in conversation the same day. Where the two differ,
   Oliver's Mac. The digest and the VPS were both offered and both declined for now.
 - **The page is a list and nothing else.** Title, company, location, age, pay, score. The title
   goes to Profesia. One button records that he applied.
+
+## The second brief (2026-10-04)
+
+Said after the first real scan — 12 matches, three of them senior roles and several not
+programming jobs at all. Transcribed and lightly tidied, nothing added.
+
+**Why this project happened.** When I started applying in January/February I was only
+applying through Profesia. What was really time consuming was finding the *correct* job.
+In this day and age there are multiple tools, and I want to spend more time getting ready
+for the job — so I want to pick the jobs that have the highest match with me.
+
+**The things worth eliminating are ones and zeros.** Going through a posting only to see
+it is senior work — you are required to have five years of experience — or that it is an
+on-site job outside your perimeter, where there is no way you are going to get hired.
+Those are not rankings. They are easy factors that you can eliminate as a one or a zero,
+and I want them gone before I read the list.
+
+**The second problem was that I had no database.** You would have to manually type out
+that you applied here, this and that. I wanted that better, and I wanted everything in
+one spot.
+
+**It should be matchmaking based.** At the beginning of the process the user uploads his
+CV, and then through some kind of questionnaire it works out what jobs are good for him.
+I might not have Angular in my CV, but it is no problem for me to learn Angular, because
+Angular shares some stuff with React.
+
+**Coding jobs only.** I want to just look for jobs that include coding. There is no point
+in me getting job offers that are only for students — that doesn't make sense. That should
+be a minimum match.
+
+**"React developer" should score high.** Not match immediately, but it should be a high
+match. The match should depend on seniority too.
+
+**Where this goes.** You wouldn't have to be looking for jobs. Maybe in the future a
+Telegram bot that just sends you the really good offers. And if there is nothing like this
+in Slovakia, push it further and make it for jobs abroad as well.
+
+## Decisions (2026-10-04, asked and answered)
+
+- **A Slovak job outside Košice that claims remote is ranked lower, not cut.** Profesia's
+  work-mode column is scraped from ad copy, so "možnosť práce z domu" on a Bratislava
+  office job is a perk and not a work permit — but the prose cannot tell that ad from a
+  genuinely remote one, so it keeps half a location (`scoring.REACH_CLAIMED`) and sits
+  below work that is certainly reachable. Only a town with no remote claim at all is a cut.
+- **An entry-level title must also name coding.** This *narrows* 2026-10-03's "internship,
+  working student … are the engagements being hunted": those engagements are still what is
+  wanted, but a title saying only "študent" or "brigádnik" and naming no trade is a miss
+  like any other. On the live pool every such title was a shop floor, an assembly line, a
+  law firm or an assistant's desk. The cost is accepted: a bare "Trainee programme" that
+  names no trade is lost with them.
+- **Adjacent stacks count, and now actually do.** `config.SKILL_ADJACENCY` is the Angular
+  sentence above, made into a rule: a title naming a neighbouring technology scores just
+  under one naming his own, and a requirement he could pick up is worth half of one he has.

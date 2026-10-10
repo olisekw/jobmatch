@@ -946,13 +946,17 @@ class ScanWindowTests(QueueTestCase):
 
     def setUp(self):
         super().setUp()
-        self._sources = scan.SOURCES
+        # Both names, like every other fake-board fixture here: `_run_scan`
+        # asks `get_enabled`, which closes over `jobmatch.sources.SOURCES` and
+        # never sees a registry swapped in on `scan`.
+        self._sources = (scan.SOURCES, scan.get_enabled)
         self.source = self.WindowSource()
         scan.SOURCES = {"window": self.source}
+        scan.get_enabled = lambda names: [self.source]
         db.set_settings(self.conn, self.admin, {"enabled_sources": ["window"]})
 
     def tearDown(self):
-        scan.SOURCES = self._sources
+        scan.SOURCES, scan.get_enabled = self._sources
         super().tearDown()
 
     def window_for(self, stored):

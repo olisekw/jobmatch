@@ -459,7 +459,7 @@ class DigestOverSocketTests(DigestTestCase, SocketTestCase):
         received = email.message_from_bytes(sink.last.data, policy=email.policy.default)
         plain = received.get_body(("plain",)).get_content()
         self.assertIn("Senior Python vývojár", plain)
-        self.assertIn(f"{BASE_URL}/jobs/", plain)
+        self.assertIn("http://x/Senior Python vývojár", plain)
         self.assertEqual(self.digested(user_id), 4)
 
     def test_a_relay_that_refuses_the_message_leaves_the_jobs_for_tomorrow(self):

@@ -84,8 +84,18 @@ SCORE_COMPONENTS = {
 INELIGIBLE = {
     "field": "Not your trade — the title names work you did not ask for",
     "level": "Above your level — the title asks for someone more senior",
-    "reach": "Out of reach — on-site somewhere you cannot get to",
+    # Two shapes of the same no, so the sentence names neither: an on-site job
+    # in a town that is not a commute, and a remote job hiring only where this
+    # person may not work. An ad that merely *claims* remote from another town
+    # is no longer cut at all — it keeps half a location and stays on the list.
+    "reach": "Out of reach — you cannot work where this job is",
 }
+
+# What a title saying "internship", "graduate" or "working student" is called
+# on a row. Derived rather than stored — `scoring.entry_level` reads the title
+# per request — but it is still a word a page prints about a job, so it is
+# written here with the rest of them.
+ENTRY_LEVEL = "entry level"
 
 # Which stored setting weights each component. `skills` is the one irregular
 # pair — `weight_skill`, singular — and it is spelled that way in every row

@@ -63,6 +63,32 @@ def extract_employment_type(text):
                              priority=("internship", "freelance", "parttime", "fulltime"))
 
 
+def extract_experience_years(text):
+    """The most demanding years-of-experience figure named, or None.
+
+    The *max* of every match, not the first: a description naming both "2+
+    years" in one sentence and "5+ years of commercial experience" in another
+    is bound by the higher one, the same "most demanding number wins" reading
+    `extract_seniority` already gives a word-based "senior" over "junior".
+
+    Patterns run in `config.EXPERIENCE_YEARS_PATTERNS`'s order, and each
+    pattern's matches are blanked out of the text before the next one runs —
+    otherwise a range ("3-5 years") and the bare "N years experience" pattern
+    both match the "5" in "3-5 years of experience", and the range's own lower
+    bound (the actual stated minimum) would be lost to it.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    text_lower = text.lower()
+    found = []
+    for pattern in config.EXPERIENCE_YEARS_PATTERNS:
+        for match in re.finditer(pattern, text_lower, re.IGNORECASE):
+            found.append(int(match.group(1)))
+        text_lower = re.sub(pattern, lambda m: " " * len(m.group(0)),
+                           text_lower, flags=re.IGNORECASE)
+    return max(found) if found else None
+
+
 def extract_all(description):
     """Extract every feature from a job description in one pass."""
     return {
@@ -70,4 +96,5 @@ def extract_all(description):
         "worktype": extract_worktype(description),
         "seniority": extract_seniority(description),
         "employment_type": extract_employment_type(description),
+        "experience_years": extract_experience_years(description),
     }

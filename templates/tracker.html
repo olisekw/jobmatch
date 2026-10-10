@@ -12,12 +12,10 @@
 <table class="tracker-table">
   <thead>
     <tr>
-      <th style="width:32%">Position</th>
-      <th style="width:16%">Company</th>
+      <th style="width:40%">Position</th>
+      <th style="width:20%">Company</th>
       <th>Applied</th>
       <th>Status</th>
-      <th style="width:24%">Notes</th>
-      <th><span class="sr-only">History</span></th>
     </tr>
   </thead>
   <tbody id="app-rows"></tbody>
@@ -62,7 +60,7 @@ async function loadApplications() {
     data = await api("/api/applications");
   } catch (err) {
     tbody.innerHTML =
-      `<tr><td colspan="6"><div class="load-error" role="alert"><p>${esc(err.message)}</p>
+      `<tr><td colspan="4"><div class="load-error" role="alert"><p>${esc(err.message)}</p>
          <button type="button" class="btn small ghost" id="tracker-retry">Try again</button>
        </div></td></tr>`;
     document.getElementById("tracker-retry")
@@ -118,24 +116,14 @@ function render() {
 
   document.getElementById("app-rows").innerHTML = rows.map(a => `
     <tr data-id="${a.id}">
-      <td data-label="Position"><a class="title" href="/jobs/${a.job_id}">${esc(a.title)}</a>
+      <td data-label="Position"><span class="title">${esc(a.title)}</span>
           <a class="out" href="${esc(a.link)}" target="_blank" rel="noopener"
              aria-label="Open this posting on ${esc(a.source_label)}">↗</a></td>
       <td data-label="Company">${esc(a.company || "")}<div class="hint">${esc(a.source_label)}</div></td>
       <td data-label="Applied" title="${esc(a.applied_exact)}">${esc(a.applied_display)}</td>
       <td data-label="Status"><select class="status-select"
              aria-label="Status of your application to ${esc(a.title)}">${statusOptions(a.status)}</select></td>
-      <td data-label="Notes"><input type="text" class="notes-input" value="${esc(a.notes)}"
-             placeholder="add a note…" aria-label="Your notes on ${esc(a.title)}"></td>
-      <td data-label="">${a.events.length ? `<button type="button" class="btn small ghost btn-history"
-             aria-expanded="false">History (${a.events.length})</button>` : ""}</td>
-    </tr>
-    ${a.events.length ? `
-    <tr class="events-row" data-for="${a.id}" hidden>
-      <td colspan="6">${a.events.map(e =>
-        `<div title="${esc(e.at_exact)}">${esc(e.at_display)} — ${esc(e.from_label)} → ${esc(e.to_label)}${e.note ? " · " + esc(e.note) : ""}</div>`
-      ).join("")}</td>
-    </tr>` : ""}`).join("");
+    </tr>`).join("");
 }
 
 document.getElementById("tracker-tabs").addEventListener("click", (e) => {
@@ -159,23 +147,10 @@ document.getElementById("app-rows").addEventListener("change", async (e) => {
       // A status change can move a row out of the tab you are looking at —
       // which is the point of the tabs, so reload and let it move.
       await loadApplications();
-    } else if (e.target.classList.contains("notes-input")) {
-      await api(`/api/applications/${id}`, { method: "PATCH", json: { notes: e.target.value } });
-      toast("Note saved.");
     }
   } catch (err) {
     toast(err.message);
   }
-});
-
-document.getElementById("app-rows").addEventListener("click", (e) => {
-  const btn = e.target.closest(".btn-history");
-  if (!btn) return;
-  const id = btn.closest("tr").dataset.id;
-  const eventsRow = document.querySelector(`tr.events-row[data-for="${id}"]`);
-  const open = eventsRow.hidden;
-  eventsRow.hidden = !open;
-  btn.setAttribute("aria-expanded", open ? "true" : "false");
 });
 
 // #offer, #waiting, … — validated against the server's groups once they land,

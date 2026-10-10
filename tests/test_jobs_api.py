@@ -1,9 +1,9 @@
-"""Tests for Phase 6's server side: the job detail endpoint and list paging.
+"""Tests for Phase 6's server side: list paging and what a row carries.
 
 Everything else in Phase 6 is `templates/`, CSS and `static/js/app.js`, which
-this suite has no way to reach. What it can hold on to is the pair of contracts
-the new UI leans on: `/api/jobs/<id>` is scoped to the caller and carries the
-description no list ships, and `/api/jobs` pages instead of silently truncating.
+this suite has no way to reach. What it can hold on to is the contract
+`/api/jobs` leans on: it pages instead of silently truncating, it never ships
+the description a row does not need, and it is scoped to the caller.
 
 Run from the repo root:  python3 -m unittest discover -s tests -t .
 """
@@ -20,54 +20,34 @@ from jobmatch.sources import base
 from tests.test_auth import PASSWORD, AuthTestCase, webapp
 
 
-class JobDetailTests(AuthTestCase):
+class JobListPayloadTests(AuthTestCase):
     def setUp(self):
         super().setUp()
         self.job_id = self.add_job("Python developer")
         self.make_user("a@example.com")
         self.client = self.client_for("a@example.com")
 
-    def test_detail_carries_the_description_and_the_callers_own_status(self):
-        job = self.client.get(f"/api/jobs/{self.job_id}").get_json()["job"]
-        self.assertEqual(job["id"], self.job_id)
-        self.assertIn("Python and React", job["description"])
-        self.assertEqual(job["status"], "new")
-        self.assertEqual(job["status_label"], "New")
-        # The list is deliberately without it: 4 KB per row, 50 rows a page.
+    def test_the_list_never_carries_a_description(self):
+        # Deliberately without it: 4 KB per row, 50 rows a page.
         listed = self.client.get("/api/jobs").get_json()["jobs"][0]
+        self.assertEqual(listed["id"], self.job_id)
         self.assertNotIn("description", listed)
 
-    def test_detail_and_list_word_a_job_the_same_way(self):
-        """Both go through `_job_payload`, so a job cannot read two ways."""
-        detail = self.client.get(f"/api/jobs/{self.job_id}").get_json()["job"]
-        listed = self.client.get("/api/jobs").get_json()["jobs"][0]
-        for key in ("title", "source_label", "worktype_label", "match_score",
-                    "score_breakdown", "posted_display", "salary_hourly"):
-            self.assertEqual(detail[key], listed[key], key)
-
-    def test_an_unknown_job_is_a_404_not_a_crash(self):
-        res = self.client.get("/api/jobs/999999")
-        self.assertEqual(res.status_code, 404)
-        self.assertIn("error", res.get_json())
-
     def test_a_job_scanned_in_after_signup_is_materialized_rather_than_missed(self):
-        """A job with no `user_jobs` row yet is still this user's to read."""
+        """A job with no `user_jobs` row yet is still this user's to act on."""
         fresh_id = self.add_job("Later arrival")
         self.conn.execute(
             "DELETE FROM user_jobs WHERE job_id = :job_id", {"job_id": fresh_id}
         )
         self.conn.commit()
-        job = self.client.get(f"/api/jobs/{fresh_id}").get_json()["job"]
-        self.assertEqual(job["status"], "new")
-
-    def test_the_page_route_is_behind_auth_like_every_other_page(self):
-        self.assertEqual(self.client.get(f"/jobs/{self.job_id}").status_code, 200)
-        signed_out = webapp.app.test_client().get(f"/jobs/{self.job_id}")
-        self.assertEqual(signed_out.status_code, 302)
+        res = self.client.post(f"/api/jobs/{fresh_id}/status", json={"status": "applied"})
+        self.assertEqual(res.status_code, 200)
+        listed = self.client.get("/api/jobs?status=applied").get_json()["jobs"]
+        self.assertIn(fresh_id, [j["id"] for j in listed])
 
 
-class JobDetailIsolationTests(AuthTestCase):
-    def test_the_detail_endpoint_is_scoped_to_the_caller(self):
+class JobListIsolationTests(AuthTestCase):
+    def test_the_list_is_scoped_to_the_caller(self):
         """B's status for a shared job is never what A is shown."""
         job_id = self.add_job("Python developer")
         self.make_user("a@example.com")
@@ -76,10 +56,10 @@ class JobDetailIsolationTests(AuthTestCase):
         client_b = self.client_for("b@example.com")
 
         client_a.post(f"/api/jobs/{job_id}/status", json={"status": "declined"})
-        self.assertEqual(client_a.get(f"/api/jobs/{job_id}").get_json()["job"]["status"],
-                         "declined")
-        self.assertEqual(client_b.get(f"/api/jobs/{job_id}").get_json()["job"]["status"],
-                         "new")
+        a_ids = [j["id"] for j in client_a.get("/api/jobs?status=declined").get_json()["jobs"]]
+        b_ids = [j["id"] for j in client_b.get("/api/jobs?status=new").get_json()["jobs"]]
+        self.assertIn(job_id, a_ids)
+        self.assertIn(job_id, b_ids)
 
 
 class JobPagingTests(AuthTestCase):
@@ -554,7 +534,8 @@ class ReachableFilterTests(AuthTestCase):
     def test_changing_it_rescores_without_a_rescan(self):
         """It moves what "matched" means, so it belongs in RESCORE_KEYS."""
         def score(job_id):
-            return self.client.get(f"/api/jobs/{job_id}").get_json()["job"]["match_score"]
+            jobs = self.client.get("/api/jobs?status=new&limit=100").get_json()["jobs"]
+            return next(j["match_score"] for j in jobs if j["id"] == job_id)
 
         self.settings(user_regions=["US"], user_skills=[], weight_skill=0,
                       weight_role=0, weight_worktype=0, weight_location=1,
@@ -574,7 +555,8 @@ class ReachableFilterTests(AuthTestCase):
         as in `db.SCAN_SETTING_KEYS`, or saving Settings would change what
         "frontend" means and leave every score on the Jobs page stale."""
         def score(job_id):
-            return self.client.get(f"/api/jobs/{job_id}").get_json()["job"]["match_score"]
+            jobs = self.client.get("/api/jobs?status=new&limit=100").get_json()["jobs"]
+            return next(j["match_score"] for j in jobs if j["id"] == job_id)
 
         job = self.add_job("Frontend Developer", country="SK")
         self.settings(user_skills=[], search_terms=["accounting"],
@@ -695,3 +677,155 @@ class MultiPlaceJobTests(AuthTestCase):
         self.assertEqual(set(offered) - {"reachable"},
                          {"EU", "LATAM", "APAC", "US", "CA"})
 
+
+
+class DeclineRestTests(AuthTestCase):
+    """The end-of-pass sweep: say no to everything you did not mark.
+
+    The contracts worth holding on to are the two that make a one-click bulk
+    action safe — it touches exactly the pile the page was showing, and it can
+    never take a job out of Applied — plus the receipt that makes the undo
+    possible without a table to remember a sweep in.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ids = [self.add_job(f"Python developer {n}") for n in range(5)]
+        self.user_id = self.make_user("a@example.com")
+        self.client = self.client_for("a@example.com")
+
+    def statuses(self):
+        return {row["job_id"]: row["status"] for row in self.conn.execute(
+            "SELECT job_id, status FROM user_jobs WHERE user_id = :u",
+            {"u": self.user_id})}
+
+    def sweep(self, query=""):
+        return self.client.post(f"/api/jobs/decline-rest?{query}").get_json()
+
+    def test_it_declines_the_whole_unmarked_pile(self):
+        data = self.sweep()
+        self.assertEqual(data["declined"], 5)
+        self.assertEqual(sorted(data["ids"]), sorted(self.ids))
+        self.assertEqual(set(self.statuses().values()), {"declined"})
+
+    def test_a_job_you_applied_to_is_never_swept(self):
+        """The one thing this button must not be able to lose."""
+        kept = self.ids[0]
+        self.client.post(f"/api/jobs/{kept}/status", json={"status": "applied"})
+        data = self.sweep()
+        self.assertEqual(data["declined"], 4)
+        self.assertNotIn(kept, data["ids"])
+        self.assertEqual(self.statuses()[kept], "applied")
+        # And the tracker entry it created is still there.
+        self.assertEqual(self.conn.scalar(
+            "SELECT COUNT(*) FROM applications WHERE user_id = :u",
+            {"u": self.user_id}), 1)
+
+    def test_it_sweeps_what_the_filters_select_and_nothing_else(self):
+        """"The rest" means the rest of the list that was on screen, so the
+        sweep goes through the same `_job_filters()` the list does."""
+        data = self.sweep("q=developer 1")
+        self.assertEqual(data["ids"], [self.ids[1]])
+        statuses = self.statuses()
+        self.assertEqual(statuses.pop(self.ids[1]), "declined")
+        self.assertEqual(set(statuses.values()), {"new"})
+
+    def test_the_other_piles_cannot_be_swept(self):
+        """A sweep of Applied or Declined is a no-op, not a second pass over
+        rows that have already been answered."""
+        self.client.post(f"/api/jobs/{self.ids[0]}/status",
+                         json={"status": "applied"})
+        for pile in ("applied", "declined"):
+            data = self.sweep(f"status={pile}")
+            self.assertEqual(data["declined"], 0, pile)
+        self.assertEqual(self.statuses()[self.ids[0]], "applied")
+
+    def test_a_second_sweep_changes_nothing(self):
+        self.assertEqual(self.sweep()["declined"], 5)
+        self.assertEqual(self.sweep()["declined"], 0)
+
+    def test_the_undo_puts_back_exactly_the_ids_it_was_given(self):
+        swept = self.sweep()["ids"]
+        res = self.client.post("/api/jobs/restore", json={"ids": swept[:2]})
+        self.assertEqual(res.get_json()["restored"], 2)
+        statuses = self.statuses()
+        self.assertEqual([statuses[job_id] for job_id in swept[:2]],
+                         ["new", "new"])
+        self.assertEqual({statuses[job_id] for job_id in swept[2:]},
+                         {"declined"})
+
+    def test_the_undo_only_moves_rows_that_are_still_declined(self):
+        """Clicked twice, or clicked after a job was re-marked by hand, it
+        cannot pull anything out of the pile it now belongs to."""
+        swept = self.sweep()["ids"]
+        self.client.post(f"/api/jobs/{swept[0]}/status",
+                         json={"status": "applied"})
+        self.assertEqual(
+            self.client.post("/api/jobs/restore", json={"ids": swept}
+                             ).get_json()["restored"], 4)
+        self.assertEqual(self.statuses()[swept[0]], "applied")
+
+    def test_the_undo_wants_a_list_of_ids(self):
+        for body in ({}, {"ids": "all"}, {"ids": None}):
+            res = self.client.post("/api/jobs/restore", json=body)
+            self.assertEqual(res.status_code, 400, body)
+        # Garbage inside the list is dropped rather than refused: the ids that
+        # can be read are still the sweep this user is undoing.
+        res = self.client.post("/api/jobs/restore", json={"ids": ["x", None]})
+        self.assertEqual(res.get_json()["restored"], 0)
+
+    def test_neither_route_can_reach_another_account(self):
+        other = self.make_user("b@example.com")
+
+        def theirs():
+            return {row["job_id"]: row["status"] for row in self.conn.execute(
+                "SELECT job_id, status FROM user_jobs WHERE user_id = :u",
+                {"u": other})}
+
+        self.sweep()
+        self.assertEqual(set(self.statuses().values()), {"declined"})
+        self.assertEqual(set(theirs().values()), {"new"}, "another account moved")
+        # And an undo naming their rows restores nothing — asked of the database
+        # again, because the point is what the second account's rows now say.
+        self.client.post("/api/jobs/restore", json={"ids": list(theirs())})
+        self.assertEqual(set(theirs().values()), {"new"})
+
+    def test_both_routes_are_behind_auth(self):
+        signed_out = webapp.app.test_client()
+        for path in ("/api/jobs/decline-rest", "/api/jobs/restore"):
+            self.assertEqual(signed_out.post(path).status_code, 401, path)
+
+
+class EntryLevelRowTests(AuthTestCase):
+    """The marker a swept-through opening carries on the row.
+
+    Derived per request from the title, like every age and label on this
+    payload, and read from the same `scoring.entry_level` the role rung calls —
+    a row cannot be labelled an internship and scored as though it were not.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.graduate = self.add_job("Graduate Developer Programme")
+        self.plain = self.add_job("React Developer")
+        self.make_user("a@example.com")
+        self.client = self.client_for("a@example.com")
+
+    def jobs(self):
+        return {job["id"]: job
+                for job in self.client.get("/api/jobs").get_json()["jobs"]}
+
+    def test_the_opening_being_hunted_says_so_on_its_row(self):
+        listed = self.jobs()
+        self.assertTrue(listed[self.graduate]["entry_level"])
+        self.assertEqual(listed[self.graduate]["entry_label"], "entry level")
+
+    def test_an_ordinary_title_carries_no_marker(self):
+        listed = self.jobs()
+        self.assertFalse(listed[self.plain]["entry_level"])
+        self.assertEqual(listed[self.plain]["entry_label"], "")
+
+    def test_the_word_comes_from_display_like_every_other_label(self):
+        from jobmatch import display
+        self.assertEqual(self.jobs()[self.graduate]["entry_label"],
+                         display.ENTRY_LEVEL)

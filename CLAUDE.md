@@ -101,8 +101,9 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
   toolmaker, a junior project manager — sat at *exactly* 37.6 on a frontend developer's list,
   above his threshold, because the four job-side components cannot tell what a job is. Each test
   refuses to fire on missing data, so a thin row is still ranked and never hidden. The reason is
-  stored in the breakdown beside the components, so the detail page can say which rule fired —
-  and `display.INELIGIBLE` owns that sentence, because a 0 with the usual "average of what is
+  stored in the breakdown beside the components, so the inline panel a row's score toggles open
+  can say which rule fired — and `display.INELIGIBLE` owns that sentence, because a 0 with the
+  usual "average of what is
   known" caption is a lie about a job that was never averaged. Off by default: it throws jobs
   away, and that has to be asked for.
 - **A level is read off the title, and a range keeps its lowest rung.** `jobs.seniority` stops at
@@ -111,15 +112,58 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
   most to a junior — lead, architect, head of — are ones that column has no word for. So
   `scoring.level_floor` reads `config.ROLE_LEVEL_ABOVE` against the title only, and takes the
   **minimum** of what it finds: "webový manažér (junior - senior)" invites a junior by name, and
-  reading only the highest word would cut an ad addressed to them.
-- **The place field outranks the prose about it.** On a board that does not declare `worktype`
-  (Profesia declares nothing), that column was read out of the description — so "možnosť práce z
-  domu" in an ad for an office on Bottova 2a stores `remote`, and a perk is not a work permit.
-  `scoring._reachable` therefore asks the place field first: a town in the user's own country
-  that is not their town settles it, whatever the prose claimed. Only once no such town is named
-  does `worktype` get asked, and then the question is reach rather than distance, over the same
-  `places.reachable_codes()` the filter uses. `config.SK_CITIES` is that town list, districts
-  included, because a Profesia place field carries a street address.
+  reading only the highest word would cut an ad addressed to them. The *score* reads the same
+  ladder through `scoring.job_level` — title first, the extracted column only when the title is
+  silent — and so does the `seniority_strict` gate, because one setting with two opinions zeroed
+  the graduate advert the component had just scored 1.0. The **cut** keeps reading the title
+  alone, and that asymmetry is the point: the column is good enough to rank a job with and not
+  good enough to hide one. **One exception, and it is a narrow one:** `scoring.experience_floor`
+  reads an explicit years-of-experience figure out of the description ("5+ years of experience",
+  "minimálne 5 rokov praxe") and *is* allowed into the cut beside the title — a "Software
+  Developer" naming no level at all, next to a body demanding five years, is the senior job in
+  junior's clothing the cut exists to catch. It is not the same kind of evidence `jobs.seniority`
+  is and is not read instead of that column's caution — a specific number is hard to state by
+  accident the way the word "senior" turns up in "a leading Slovak company", so it earns
+  title-grade trust on its own rather than reopening the column's.
+- **An entry-level title earns its rung by naming the work, like every other title.** These
+  are the engagements being hunted (`MISSION.md`) and they are what a title-only reading is
+  worst at, so `scoring.entry_level` used to share the ladder's last rung with `ROLE_GENERIC`
+  and carry any "študent" title past the field test. It saved the occasional untraded
+  "Trainee programme" and admitted a flood: four of the first real list's eleven rows were
+  student ads for a shop floor, an assembly line and a recruitment desk, and no vocabulary of
+  other trades can catch a title that never says what the work is. The brief is coding jobs
+  (`MISSION.md`, 2026-10-04), so the push-through is gone and the openings actually wanted
+  lose nothing, because they name the trade: "Trainee frontend developer" is matched on its
+  discipline two rungs higher. `entry_level` still owns the "entry level" tag on the row — it
+  simply stopped deciding eligibility. Plain **"junior" was never one of its words**: it
+  states a rung, which is the seniority component's question.
+- **The place field outranks the prose about it, but no longer outright.** On a board that
+  does not declare `worktype` (Profesia declares nothing), that column was read out of the
+  description — so "možnosť práce z domu" in an ad for an office on Bottova 2a stores
+  `remote`, and a perk is not a work permit. `scoring.reach` therefore asks the place field
+  first. What it cannot do is tell that ad apart from a genuinely remote Bratislava job, so
+  the answer has **three** values and not two: `REACH_OK`, `REACH_CLAIMED` (another town in
+  your country, but the ad claims remote — half a location, ranked under certain work, never
+  cut) and `REACH_NO`, which is the only one `ineligible` cuts. One derivation with two
+  readers, which is also the bug it fixed: the cut consulted the place field and the
+  component did not, so the same Bratislava job `ineligible` wanted to throw away was
+  scoring a *perfect* 1.0 on its location. Every test refuses to fire on missing data —
+  with no answer to "where are you", a town in a posting is evidence about nobody.
+  `config.SK_CITIES` is that town list, districts included, because a Profesia place field
+  carries a street address.
+- **A neighbouring technology is not a miss.** `config.SKILL_ADJACENCY` groups the stacks
+  where knowing one is most of knowing the other, which `MISSION.md` asks for by name — and
+  without it an Angular advert read as *generic* to a React developer, the same 0.35 as a
+  maintenance engineer, because the word is in no discipline's vocabulary and in nobody's CV.
+  Groups rather than a graph, unioned by `scoring.adjacent_skills` because a technology can
+  sit in two (kotlin is beside java and beside swift), expanded once per user in
+  `db.get_user_prefs` beside `reachable`. Two readers: the role ladder gains a rung
+  (`ROLE_ADJACENT`, under his own stack and over his discipline) and the skills component
+  counts an adjacent requirement as `SKILL_ADJACENT_CREDIT` of one he has — half, because
+  scoring the two the same would let a job asking for nothing he knows tie one asking for
+  his CV. And **naming both ends names the middle**: `user_disciplines` infers `fullstack`
+  from frontend + backend, without which "senior full stack developer" scored the generic
+  rung on the list of a developer whose own terms said both.
 - **The role ladder's fourth rung is other people's professions.** `ROLE_GENERIC` holds
   "engineer" and "inžinier" because on a job board they usually mean something — and in Slovakia
   they are mostly a factory. `config.ROLE_OTHER_FIELDS` is tested **after** the skill and
@@ -271,6 +315,17 @@ Flask app serving server-rendered pages (black & white, vanilla JS) + a JSON API
   **refuse** it above 1 against an in-memory store. Threads make module-level mutable state a
   live question: `db._ENGINES` is locked (two engines means two pools), `auth._DUMMY_HASH`
   races harmlessly on purpose, and `app._deployed` / `obs._configured` are boot-path only.
+- **"All the others" is the list's own filter, and it can only ever move `new` rows.**
+  `POST /api/jobs/decline-rest` is the end of a triage pass — mark what you applied to, say no to
+  the rest in one click — and it answers the query string through the **same** `_job_filters()`
+  the list and its count go through, so it cannot sweep a row the page was not showing, and it
+  sweeps the ones past "Load more" because a pile is not the first 50 of itself. Both batch
+  routes go through `_move_jobs`, whose `only_from` is the safety: a sweep moves rows out of
+  `new` and an undo out of `declined`, so neither can touch a job that has since been marked by
+  hand, and a second click of either changes nothing. The ids come back in the response and
+  `POST /api/jobs/restore` takes them — the receipt is the client's, which is why undoing a bulk
+  action needs no table to remember it in. Chunked at `_ID_CHUNK` because sqlite caps a statement
+  at 999 bound variables and a pile is routinely larger than that.
 - **Multi-user as of Phase 3**: argon2id + Flask-Login sessions, CSRF on every mutating route,
   rate limits on the credential endpoints. Every route is behind `@login_required` and every
   query is scoped by `current_user_id()` — adding a route means doing both. The two deliberate

@@ -358,6 +358,7 @@ def _insert_stub(conn, source, stub):
     description = (stub.get("description") or "").strip()
     features = extract.extract_all(description) if description else {
         "skills": "", "worktype": None, "seniority": None, "employment_type": None,
+        "experience_years": None,
     }
     # Structured fields the board supplied win over regex extraction
     worktype = stub.get("worktype") or features["worktype"]
@@ -388,12 +389,13 @@ def _insert_stub(conn, source, stub):
         """INSERT INTO jobs
            (source, source_id, title, company, location, salary, freshness, link,
             description, skills, worktype, seniority, employment_type,
-            posted_at, salary_min, salary_max, salary_currency, salary_period,
-            country, countries)
+            experience_years, posted_at, salary_min, salary_max, salary_currency,
+            salary_period, country, countries)
            VALUES (:source, :source_id, :title, :company, :location, :salary,
                    :freshness, :link, :description, :skills, :worktype, :seniority,
-                   :employment_type, :posted_at, :salary_min, :salary_max,
-                   :salary_currency, :salary_period, :country, :countries)
+                   :employment_type, :experience_years, :posted_at, :salary_min,
+                   :salary_max, :salary_currency, :salary_period, :country,
+                   :countries)
            ON CONFLICT (source, source_id) DO NOTHING""",
         {
             "source": source.name, "source_id": stub["source_id"],
@@ -402,7 +404,9 @@ def _insert_stub(conn, source, stub):
             "freshness": stub["freshness"], "link": stub["link"],
             "description": description, "skills": features["skills"],
             "worktype": worktype, "seniority": seniority,
-            "employment_type": employment_type, "posted_at": posted_at,
+            "employment_type": employment_type,
+            "experience_years": features["experience_years"],
+            "posted_at": posted_at,
             "salary_min": s_min, "salary_max": s_max,
             "salary_currency": s_cur, "salary_period": s_per,
             "country": places.primary(found), "countries": places.pack(found),
@@ -478,7 +482,8 @@ def _check_yield(state, source, new_stubs):
 
 # What `extract.extract_all` derives from a description. `description` itself is
 # never in here: it is what was just read, not something guessed from it.
-EXTRACTED_COLUMNS = ("skills", "worktype", "seniority", "employment_type")
+EXTRACTED_COLUMNS = ("skills", "worktype", "seniority", "employment_type",
+                    "experience_years")
 
 
 def _enrich_phase(state, conn, page):
