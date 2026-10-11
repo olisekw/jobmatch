@@ -9,7 +9,7 @@
 <div class="panel">
   <div class="dropzone" id="dropzone">
     <strong>Drop your CV here</strong> or click to choose a PDF.<br>
-    <span class="hint" id="resume-state">Your skills are picked out of it and added to your profile.</span>
+    <span class="hint" id="resume-state">Skills found in it are added to your profile.</span>
   </div>
   <input type="file" id="resume-file" accept=".pdf" style="display:none">
 </div>
@@ -31,14 +31,18 @@
     </div>
   </div>
   <div class="mt">
-    <label>Where you can work <span class="hint">work permit, not commute — this is what decides whether a remote job counts as a fit</span></label>
+    <label>Where you can work <span class="hint">work permit, not commute — decides if a remote job counts as a fit</span></label>
     <div class="chip-row" id="region-chips"></div>
     <p class="hint" id="region-hint"></p>
   </div>
 
   <div class="mt">
-    <label>Your skills <span class="hint">comma-separated; auto-filled from your CV</span></label>
-    <textarea id="s-skills" rows="3"></textarea>
+    <label>Your skills <span class="hint">auto-filled from your CV; click to add or remove</span></label>
+    <div id="skill-categories"></div>
+    <div class="mt">
+      <label>Other skills <span class="hint">anything not listed above, comma-separated</span></label>
+      <input type="text" id="s-skills-other">
+    </div>
   </div>
 
   {# Search terms live here, not under Scanning, because they are *yours*: they
@@ -49,7 +53,7 @@
     <label>What you're looking for <span class="hint">one per line or comma-separated</span></label>
     <div class="chip-row" id="profile-chips"></div>
     <textarea id="s-terms" rows="4"></textarea>
-    <p class="hint">These decide the Role part of every score{% if can_scan %}, and they are what the shared crawl asks the boards for{% endif %}.</p>
+    <p class="hint">Decides the Role part of every score{% if can_scan %}; also what the crawl searches for{% endif %}.</p>
   </div>
 </div>
 
@@ -57,14 +61,14 @@
 <div class="panel">
   <label>Minimum match score: <output id="s-threshold-out" class="mono"></output></label>
   <input type="range" id="s-threshold" min="0" max="100" step="5">
-  <p class="hint">Jobs below this still show on the Jobs page — drop its score floor to nothing and they are all there. They just don't count as matches. Takes effect straight away, no re-scan needed.</p>
+  <p class="hint">Jobs below this still appear on the Jobs page; they just don't count as matches.</p>
 
   {# Five sliders and a rule you set once and then leave alone. The face of this
      panel is the one number that gets moved. #}
   <details class="tune" id="tune-weights">
     <summary>Fine-tune the weights <span class="hint" id="tune-summary"></span></summary>
     <div class="mt">
-      <label>What matters most <span class="hint">these are relative; they get balanced out when you save</span></label>
+      <label>What matters most <span class="hint">relative to each other — rebalanced automatically when you save</span></label>
       {# One row per score component, from `display.SCORE_COMPONENTS`, so a slider
          cannot go missing when a component is added — which is what happened to
          the landing page. The id keeps its historical shape: `weight_skill` is
@@ -84,7 +88,7 @@
       <div class="check-row">
         <input type="checkbox" id="s-only-takeable">
         <label for="s-only-takeable" style="margin:0">Only jobs I can take —
-          hide another trade, a level above me, or a town I cannot get to</label>
+          hide wrong trade, level or location</label>
       </div>
     </div>
   </details>
@@ -98,7 +102,7 @@
    the demo included. #}
 <h2>Crawl</h2>
 <div class="panel">
-  <p class="hint">One scrape serves every account on this instance, and it runs on these settings.</p>
+  <p class="hint">Runs once for every account, on these settings.</p>
   <div class="settings-grid mt">
     <div>
       <label>Only jobs from the last <span class="hint">days — <span id="s-days-range"></span></span></label>
@@ -112,6 +116,10 @@
 </div>
 {% endif %}
 
+{# No account to sign out of or delete in local-no-auth mode — every request
+   already resolves to the one local admin, so this whole section would be a
+   heading over nothing. #}
+{% if not local_no_auth %}
 <h2>Account</h2>
 <div class="panel">
   <p>Signed in as <strong class="mono">{{ current_user.email }}</strong>.</p>
@@ -136,6 +144,7 @@
   </div>
   <button class="btn mt" id="delete-account">Delete my account</button>
 </div>
+{% endif %}
 
 {# One endpoint, so one save. Five buttons meant editing the threshold, a weight
    and your skills and then pressing "Save profile" silently threw two of the
@@ -219,13 +228,54 @@ function renderRegions() {
                aria-pressed="${active.has(o.value)}"
                data-code="${esc(o.value)}">${esc(o.label)}</button>`).join("");
   document.getElementById("region-hint").textContent = active.size === 0
-    ? "Nothing set, so remote jobs are scored without a location — pick the places you can take a job in."
+    ? "Nothing set — remote jobs score without a location."
     : derivedRegions()
-      ? "Taken from your location. Change any of these and it stops following it."
-      : "Your own choice. Clear them all to go back to following your location.";
+      ? "Taken from your location; edit to override."
+      : "Your choice — clear all to follow location again.";
 }
 
 document.getElementById("region-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  const on = !chip.classList.contains("active");
+  chip.classList.toggle("active", on);
+  chip.setAttribute("aria-pressed", String(on));
+});
+
+/* Buttons for the curated vocabulary (`config.SKILL_CATEGORIES`), a plain
+   text field for anything the CV extractor found that isn't in it — so a
+   skill the picker doesn't list is still visible and still saved, never
+   silently dropped on the next save. */
+function curatedSkillValues() {
+  return (settings.skill_categories || []).flatMap(cat => cat.items.map(i => i.value));
+}
+
+function pickedSkills() {
+  return [...document.querySelectorAll("#skill-categories .chip.active")].map(c => c.dataset.skill);
+}
+
+function otherSkills() {
+  return splitList(val("s-skills-other"));
+}
+
+function renderSkills() {
+  const have = new Set((settings.user_skills || []).map(s => s.toLowerCase()));
+  document.getElementById("skill-categories").innerHTML =
+    (settings.skill_categories || []).map(cat => `
+      <div class="skill-category">
+        <span class="skill-category-label">${esc(cat.label)}</span>
+        <div class="chip-row">${cat.items.map(it => `
+          <button type="button" class="chip ${have.has(it.value) ? "active" : ""}"
+                  aria-pressed="${have.has(it.value)}"
+                  data-skill="${esc(it.value)}">${esc(it.label)}</button>`).join("")}
+        </div>
+      </div>`).join("");
+  const curated = new Set(curatedSkillValues());
+  document.getElementById("s-skills-other").value =
+    (settings.user_skills || []).filter(s => !curated.has(s.toLowerCase())).join(", ");
+}
+
+document.getElementById("skill-categories").addEventListener("click", (e) => {
   const chip = e.target.closest(".chip");
   if (!chip) return;
   const on = !chip.classList.contains("active");
@@ -254,7 +304,7 @@ function render() {
   // are always the same word.
   fillSelect("s-seniority", settings.seniority_options, settings.user_seniority);
   fillSelect("s-worktype", settings.worktype_options, settings.user_worktype);
-  document.getElementById("s-skills").value = (settings.user_skills || []).join(", ");
+  renderSkills();
   renderRegions();
 
   setRange("s-threshold", settings.min_match_score);
@@ -298,21 +348,23 @@ function render() {
   }
 
   const digestBox = document.getElementById("s-digest");
-  digestBox.checked = !!settings.digest_enabled;
-  // The preference and the deployment are two different reasons for silence,
-  // and a checkbox that saves happily while nothing ever arrives is the worst
-  // of them — so the hint says which one is in play.
-  digestBox.disabled = !settings.digest_available;
-  document.getElementById("digest-hint").textContent = settings.digest_available
-    ? `At most one email every ${settings.digest_interval_hours} h to ${DIGEST_TO}, `
-      + `listing jobs above your minimum match score that you have not been sent `
-      + `before. Nothing goes out when there is nothing new.`
-    : "This instance has no mail server configured, so no email can be sent from it.";
+  if (digestBox) {
+    digestBox.checked = !!settings.digest_enabled;
+    // The preference and the deployment are two different reasons for silence,
+    // and a checkbox that saves happily while nothing ever arrives is the worst
+    // of them — so the hint says which one is in play.
+    digestBox.disabled = !settings.digest_available;
+    document.getElementById("digest-hint").textContent = settings.digest_available
+      ? `At most one email every ${settings.digest_interval_hours} h to ${DIGEST_TO}, `
+        + `listing jobs above your minimum match score that you have not been sent `
+        + `before. Nothing goes out when there is nothing new.`
+      : "This instance has no mail server configured, so no email can be sent from it.";
+  }
 
   if (settings.resume_present) {
     document.getElementById("resume-state").textContent =
-      `Your CV is loaded — ${plural((settings.user_skills || []).length, "skill")} in your profile. `
-      + `Drop a new PDF here to replace it.`;
+      `CV loaded — ${plural((settings.user_skills || []).length, "skill")} found. `
+      + `Drop a new PDF to replace it.`;
   }
   renderTuneSummary();
 }
@@ -328,7 +380,8 @@ const FIELDS = [
   { key: "user_location", read: () => val("s-location").trim().toLowerCase() },
   { key: "user_seniority", read: () => val("s-seniority") },
   { key: "user_worktype", read: () => val("s-worktype") },
-  { key: "user_skills", read: () => splitList(val("s-skills")) },
+  { key: "user_skills", id: "skill-categories",
+    read: () => [...new Set([...pickedSkills(), ...otherSkills()])] },
   /* Saving without touching the chips must not quietly pin the derived answer —
      otherwise moving to Vienna next month would leave the old country behind.
      So an untouched derived set still reads as "still derived". */
@@ -341,7 +394,7 @@ const FIELDS = [
   { key: "min_match_score", read: () => Number(val("s-threshold")) },
   { key: "seniority_strict", read: () => checked("s-strict") },
   { key: "strict_match", read: () => checked("s-only-takeable") },
-  { key: "digest_enabled", read: () => checked("s-digest") },
+  { key: "digest_enabled", id: "s-digest", read: () => checked("s-digest") },
   // Admin-only, so absent from the page for everybody else — `present` is what
   // keeps a missing control from reading as a cleared setting.
   // An empty or nonsense box reads as "leave it alone" — `|| 0` used to save a
@@ -489,19 +542,22 @@ async function uploadResume(file) {
   try {
     const res = await api("/api/resume", { method: "POST", body: form });
     stateEl.textContent = res.detected_skills.length
-      ? `Read your CV and picked up ${res.detected_skills.join(", ")}.`
-      : "Read your CV, but no familiar skills stood out — add them by hand below.";
-    document.getElementById("s-skills").value = res.user_skills.join(", ");
+      ? `Picked up: ${res.detected_skills.join(", ")}.`
+      : "No familiar skills found — add them below.";
+    settings.user_skills = res.user_skills;
+    renderSkills();
     toast("CV updated — every job rescored against it.");
   } catch (err) {
-    stateEl.textContent = "That upload didn't work. Try again, or pick another PDF.";
+    stateEl.textContent = "Upload failed — try again.";
     toast(err.message);
   }
 }
 
 /* Account deletion. Two confirmations on purpose — the password proves it is
-   you, the prompt proves you meant it. */
-document.getElementById("delete-account").addEventListener("click", async () => {
+   you, the prompt proves you meant it. The whole section — this button
+   included — is absent in local-no-auth mode, so there is nothing to wire up. */
+const deleteButton = document.getElementById("delete-account");
+if (deleteButton) deleteButton.addEventListener("click", async () => {
   const passwordEl = document.getElementById("delete-password");
   const errorEl = document.getElementById("delete-error");
   const show = (message) => {

@@ -18,6 +18,8 @@
       <a href="/jobs" class="{{ 'active' if active == 'jobs' }}" {% if active == 'jobs' %}aria-current="page"{% endif %}>Jobs</a>
       <a href="/tracker" class="{{ 'active' if active == 'tracker' }}" {% if active == 'tracker' %}aria-current="page"{% endif %}>Tracker</a>
       <a href="/settings" class="{{ 'active' if active == 'settings' }}" {% if active == 'settings' %}aria-current="page"{% endif %}>Settings</a>
+      <button type="button" class="help-btn" id="tutorial-open" aria-label="Show the tutorial" title="Show the tutorial">?</button>
+      {% if not local_no_auth %}
       <form class="signout" method="post" action="{{ url_for('do_logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {# The email still reaches a reader — as a tooltip and as the accessible
@@ -35,6 +37,7 @@
            carries a token like every other mutation. #}
         <button type="submit">Sign out</button>
       </form>
+      {% endif %}
     </div>
   </nav>
 
@@ -62,6 +65,25 @@
     {# Only whoever may start the shared scan may stop it. #}
     {% if can_scan %}<button type="button" class="link-btn" id="scan-cancel">Cancel scan</button>{% endif %}
     <button type="button" class="dismiss" id="scan-dismiss" aria-label="Hide this progress bar">&times;</button>
+  </div>
+
+  {# A step-by-step walkthrough behind the "?" in the nav — on by request
+     rather than shown once and dismissed, so it stays findable for whoever
+     opens this weeks after the first login and forgets where things are. #}
+  <div class="modal-backdrop" id="tutorial-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+      <button type="button" class="modal-close" id="tutorial-close" aria-label="Close tutorial">&times;</button>
+      <h2 id="tutorial-title"></h2>
+      <img id="tutorial-image" alt="">
+      <p class="hint" id="tutorial-caption"></p>
+      <div class="tutorial-foot">
+        <span class="hint" id="tutorial-step-count"></span>
+        <span class="tutorial-actions">
+          <button type="button" class="btn ghost" id="tutorial-back">Back</button>
+          <button type="button" class="btn" id="tutorial-next">Next</button>
+        </span>
+      </div>
+    </div>
   </div>
 
   <main id="main">

@@ -125,6 +125,12 @@ def check_runtime_config(deployed=None):
 
 _deployed = False
 
+# Set only by this module's own `__main__` block, never by an import — so
+# `pytest` (which imports `app` the same way `wsgi.py` does) and any other
+# tool that loads this module keep exercising real auth, and only a human
+# actually running `python3 app.py` gets the no-login dev experience.
+_dev_server = False
+
 
 def mark_deployed():
     """Tighten what only a loopback dev server is allowed to be lax about.
@@ -227,6 +233,66 @@ def load_user(user_id):
     return auth.User(row) if row else None
 
 
+def local_no_auth():
+    """No login anywhere: true only when this file's own dev server is
+    running, undeployed, on loopback, and not showing the public demo.
+
+    `_dev_server` is the load-bearing check — set only by the `__main__`
+    block below, never by an import — so `pytest`, `wsgi.py`, and any other
+    tool that imports `app` keep exercising real auth. `config.IS_LOOPBACK`
+    and `_deployed` are the belt-and-braces part, the same two signals
+    `check_runtime_config`/`mark_deployed` already use for the opposite
+    purpose, so a gunicorn/container deployment can never trip this either.
+
+    `not config.DEMO_MODE` keeps this from swallowing the demo: without it,
+    `tools/screenshots.py` running `python3 app.py` against a demo-seeded
+    scratch DB resolves every anonymous request straight to that one
+    existing account, and "/" never renders the landing page's demo button
+    at all — the two features are both "skip the login screen", but for
+    different audiences, and a developer testing demo mode locally still
+    wants the real logged-out landing page in front of it.
+    """
+    return _dev_server and config.IS_LOOPBACK and not _deployed and not config.DEMO_MODE
+
+
+@app.before_request
+def _relax_session_protection_locally():
+    """`session_protection="strong"` guards a real login against a stolen
+    cookie; there is no real login to steal when every request already
+    resolves to the same local account. Without this, the first page's own
+    CSRF token write leaves a session with no Flask-Login `_id` in it, and
+    "strong" mode reads that on the very next request as a hijacked session
+    and wipes it — undoing the request_loader below on every second request.
+    """
+    app.config["SESSION_PROTECTION"] = None if local_no_auth() else "strong"
+
+
+def local_account(conn):
+    """The account a no-login request acts as.
+
+    The lowest-id admin (`db.admin_user_id`) — the same account the scheduled
+    crawl already runs as — so local-no-auth and a real login land on
+    identical settings. `db.ensure_local_user` only fires when the database
+    has never had an account at all.
+    """
+    user_id = db.admin_user_id(conn) or db.ensure_local_user(conn)
+    return db.get_user(conn, user_id)
+
+
+@login_manager.request_loader
+def load_user_from_request(_request):
+    """Flask-Login's fallback path — tried only when no session is logged in.
+
+    On loopback this resolves every anonymous request to `local_account`, so
+    there is no login screen at all; a real session (an explicit login, even
+    as a different local account) always takes precedence and is untouched.
+    """
+    if not local_no_auth():
+        return None
+    row = local_account(get_db())
+    return auth.User(row) if row else None
+
+
 @app.teardown_appcontext
 def close_db(_exc):
     conn = g.pop("db", None)
@@ -257,6 +323,7 @@ def template_globals():
         "demo_password": config.DEMO_PASSWORD,
         "demo_reset_hours": config.DEMO_RESET_HOURS,
         "in_demo": in_demo(),
+        "local_no_auth": local_no_auth(),
     }
 
 
@@ -371,7 +438,12 @@ def handle_rate_limited(err):
 @limiter.limit("10 per minute; 60 per hour", methods=["POST"])
 def page_login():
     target = safe_next(request.args.get("next")) or url_for("page_dashboard")
-    if current_user.is_authenticated:
+    # Not `current_user.is_authenticated`: local-no-auth makes that true for
+    # every request, which would make the form itself unreachable. A session
+    # that actually logged in (`_user_id` set by `_start_session`) is the only
+    # case worth skipping past — identical to `is_authenticated` everywhere
+    # that local-no-auth isn't active.
+    if session.get("_user_id"):
         return redirect(target)
 
     email = ""
@@ -399,7 +471,7 @@ def page_login():
 def page_signup():
     if not config.ALLOW_SIGNUP:
         return render_template("auth.html", mode="closed"), 403
-    if current_user.is_authenticated:
+    if session.get("_user_id"):  # see page_login's identical guard
         return redirect(url_for("page_dashboard"))
 
     email = ""
@@ -496,10 +568,11 @@ def api_account_delete():
         return demo_forbidden("be deleted")
     conn = get_db()
     user_id = current_user_id()
-    password = (request.get_json(silent=True) or {}).get("password") or ""
-    row = db.get_user_by_email(conn, current_user.email)
-    if row is None or not auth.verify_password(row["password_hash"], password):
-        return jsonify({"error": "That password is not right."}), 403
+    if not local_no_auth():
+        password = (request.get_json(silent=True) or {}).get("password") or ""
+        row = db.get_user_by_email(conn, current_user.email)
+        if row is None or not auth.verify_password(row["password_hash"], password):
+            return jsonify({"error": "That password is not right."}), 403
 
     pdf_path = config.resume_path(user_id)
     try:
@@ -1133,6 +1206,10 @@ def api_settings_get():
     )
     settings["pay_floors"] = _pay_floor_options()
     settings["posted_windows"] = _posted_window_options()
+    settings["skill_categories"] = [
+        {"label": label, "items": [{"value": v, "label": l} for v, l in items]}
+        for label, items in config.SKILL_CATEGORIES
+    ]
     # Labels live in one place; the pages that need a <select> or a chip read
     # them from here rather than keeping their own copy.
     settings["profile_labels"] = {
@@ -1374,6 +1451,7 @@ def _last_scan_summary(row):
 
 
 if __name__ == "__main__":
+    _dev_server = True
     check_runtime_config()
     bootstrap_db()
     if config.SCAN_IN_PROCESS:

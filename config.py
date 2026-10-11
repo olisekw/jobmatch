@@ -367,6 +367,48 @@ CODING_PATTERNS = [
     r'flutter', r'firebase',
 ]
 
+# The Settings page's skill picker: buttons instead of a comma-separated list,
+# grouped the way a CV reads rather than the way `CODING_PATTERNS` above is
+# grouped for matching. Every `value` here is the exact string
+# `extract.extract_skills` produces for that word (verified against the
+# patterns above, not just typed by hand) — `scoring._skills_component`
+# compares `user_skills` to a job's stored skills with a plain lowercase
+# string match, so a button whose value is a token the extractor would never
+# actually emit is a skill that can never match a job. A skill picked up from
+# a CV that these buttons don't cover (the extractor's vocabulary is wider
+# than any one list of buttons should be) is never dropped — Settings keeps a
+# free-text "other skills" field alongside these for exactly that.
+SKILL_CATEGORIES = [
+    ("Frontend", [
+        ("html", "HTML"), ("css", "CSS"), ("sass", "Sass"), ("less", "Less"),
+        ("javascript", "JavaScript"), ("typescript", "TypeScript"),
+        ("react", "React"), ("vue", "Vue"), ("angular", "Angular"),
+        ("svelte", "Svelte"), ("tailwind", "Tailwind"), ("bootstrap", "Bootstrap"),
+    ]),
+    ("Backend", [
+        ("python", "Python"), ("java", "Java"), ("c#", "C#"), ("c++", "C++"),
+        ("php", "PHP"), ("go", "Go"), ("rust", "Rust"), ("ruby", "Ruby"),
+        ("node.js", "Node.js"), ("django", "Django"), ("flask", "Flask"),
+        ("spring", "Spring"), ("laravel", "Laravel"), ("express", "Express"),
+    ]),
+    ("Databases", [
+        ("sql", "SQL"), ("mysql", "MySQL"), ("postgresql", "PostgreSQL"),
+        ("mongodb", "MongoDB"), ("redis", "Redis"),
+    ]),
+    ("Cloud & DevOps", [
+        ("git", "Git"), ("github", "GitHub"), ("gitlab", "GitLab"),
+        ("docker", "Docker"), ("kubernetes", "Kubernetes"),
+        ("ci/cd", "CI/CD"), ("jenkins", "Jenkins"),
+    ]),
+    ("Data & ML", [
+        ("numpy", "NumPy"), ("pandas", "Pandas"),
+        ("tensorflow", "TensorFlow"), ("keras", "Keras"),
+    ]),
+    ("Mobile & other", [
+        ("flutter", "Flutter"), ("firebase", "Firebase"), ("graphql", "GraphQL"),
+    ]),
+]
+
 # ── Worktype / seniority / employment-type detection ─────────
 # Ads decline "práca" freely ("ponúkame prácu z domu"), so the noun is matched as
 # pr[áa]c\w* — the phrase after it is what carries the meaning.

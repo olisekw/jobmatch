@@ -3,7 +3,6 @@
 {% block content %}
 
 <h1>Dashboard</h1>
-<p class="subtitle">Your job search at a glance.</p>
 
 {# Three tiles, not five. "Worth a look" and "Still to review" were the same
    question at two thresholds — reading 2 327 and 9 763 side by side is what
@@ -18,7 +17,7 @@
 {# 56% of the pool has no description, and nothing on any page said so. #}
 <p class="hint" id="unscored-note"></p>
 
-<div class="panel">
+<div class="panel" id="scan-panel">
   <div style="display:flex; align-items:center; gap:1.5rem; flex-wrap:wrap;">
     {# The crawl is shared by every account, so only an admin may set one off;
        everybody else reads the results of the schedule. #}
@@ -27,7 +26,7 @@
       <div id="last-scan" class="muted">No scan has run yet.</div>
       <div class="hint" id="scan-problems"></div>
       {% if scan_interval_hours %}
-        <div class="hint">The job boards are scanned for everyone every {{ scan_interval_hours }} hours.</div>
+        <div class="hint">Scanned every {{ scan_interval_hours }}h.</div>
       {% endif %}
     </div>
   </div>
@@ -68,8 +67,7 @@ function renderStats(s) {
   // The one thing no page explained: over half the pool has no description, so
   // it is deliberately unscored rather than scored badly.
   document.getElementById("unscored-note").textContent = s.unscored
-    ? `${s.unscored} of the ${s.total_jobs} jobs collected have no description yet — `
-      + `the next scan fetches them, and they stay unscored until it does.`
+    ? `${s.unscored} of ${s.total_jobs} jobs have no description yet — the next scan will fetch them.`
     : "";
 
   const scan = s.last_scan;
@@ -104,7 +102,7 @@ async function loadTopJobs(threshold) {
   }
   topJobs.removeAttribute("aria-busy");
   if (!data.jobs.length) {
-    topJobs.innerHTML = '<div class="empty">Nothing clears your match bar yet. Run a scan, or lower the bar in Settings.</div>';
+    topJobs.innerHTML = '<div class="empty">Nothing clears your match bar — run a scan or lower it in Settings.</div>';
     return;
   }
   topJobs.innerHTML = data.jobs.map(j => jobCard(j, { actions: false, skills: false })).join("");

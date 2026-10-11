@@ -110,6 +110,14 @@ nav .links a {
 nav .links a:hover { color: var(--on-surface); }
 nav .links a.active { color: var(--surface); background: var(--on-surface); font-weight: 600; }
 
+nav .help-btn {
+  width: 1.6rem; height: 1.6rem; border-radius: 50%;
+  border: 1px solid var(--on-surface-dim); background: none; color: var(--on-surface-dim);
+  font: inherit; font-weight: 700; font-size: 0.8rem; line-height: 1;
+  cursor: pointer; margin-left: 0.6rem;
+}
+nav .help-btn:hover { color: var(--on-surface); border-color: var(--on-surface); }
+
 nav .signout {
   display: flex; align-items: center; gap: 0.7rem;
   margin-left: 0.9rem; padding-left: 1.1rem;
@@ -516,6 +524,13 @@ td { padding: 0.85rem 0.75rem; border-bottom: 1px solid var(--gray-2); vertical-
 }
 .chip.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
+.skill-category { margin-bottom: 0.8rem; }
+.skill-category:last-child { margin-bottom: 0; }
+.skill-category-label {
+  display: block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--gray-4); margin-bottom: 0.2rem;
+}
+
 .dropzone {
   border: 2px dashed var(--gray-3);
   padding: 2.2rem;
@@ -557,6 +572,40 @@ td { padding: 0.85rem 0.75rem; border-bottom: 1px solid var(--gray-2); vertical-
   cursor: pointer; padding: 0 0.2rem;
 }
 #scan-strip .dismiss:hover { color: var(--on-surface); }
+
+/* ── Tutorial modal ──────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1.5rem;
+  z-index: 100;
+}
+.modal {
+  position: relative;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--gray-2);
+  padding: 1.8rem; width: 100%; max-width: 440px;
+  max-height: 90vh; overflow-y: auto;
+}
+.modal h2 { margin-top: 0; padding-right: 1.5rem; }
+.modal-close {
+  position: absolute; top: 1rem; right: 1rem;
+  font: inherit; font-size: 1.3rem; line-height: 1;
+  background: none; border: none; color: var(--gray-4);
+  cursor: pointer; padding: 0.1rem 0.3rem;
+}
+.modal-close:hover { color: var(--ink); }
+#tutorial-image {
+  display: block; width: 100%; height: auto;
+  border: 1px solid var(--gray-2);
+  margin-bottom: 0.9rem;
+}
+.tutorial-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  margin-top: 1.2rem;
+}
+.tutorial-actions { display: flex; gap: 0.6rem; }
 
 /* ── Toast ───────────────────────────────────────────── */
 #toast {

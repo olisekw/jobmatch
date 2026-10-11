@@ -43,7 +43,7 @@
 <div class="sweep-row" id="sweep-row" hidden></div>
 <p class="hint kbd-hint">
   Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>a</kbd> applied, <kbd>d</kbd> decline,
-  <kbd>s</kbd> breakdown, <kbd>Enter</kbd> open on the board.
+  <kbd>s</kbd> breakdown, <kbd>Enter</kbd> opens the board.
 </p>
 
 {% endblock %}
@@ -102,12 +102,12 @@ function subtitle(settings) {
   const where = settings.user_location
     ? `in ${settings.user_location} or remote` : "anywhere you can work";
   if (!settings.strict_match) {
-    return `Every offer found so far, scored against your profile.`
+    return `Every offer, scored against your profile.`
       + (boards.length ? ` Boards: ${boards.join(", ")}.` : "");
   }
   const level = settings.user_seniority
     ? `, nothing above ${settings.user_seniority}` : "";
-  return `Only jobs you can take — ${where}${level}, and no other trade.`
+  return `Only jobs you can take — ${where}${level}, no other trade.`
     + (boards.length ? ` From ${boards.join(", ")}.` : "");
 }
 
@@ -229,7 +229,7 @@ function render(hasMore) {
   if (!state.jobs.length) {
     list.innerHTML = `<div class="empty">`
       + (state.status === "new"
-          ? `Nothing to review. Run a scan, or lower your match threshold in Settings.`
+          ? `Nothing to review — run a scan or lower your threshold in Settings.`
           : `Nothing in this pile yet.`)
       + `</div>`;
     document.getElementById("more-row").hidden = true;
@@ -291,9 +291,9 @@ function renderSweep() {
     ? `<button type="button" class="btn small" data-sweep="go">Decline all ${state.total}</button>
        <button type="button" class="btn small ghost" data-sweep="cancel">Cancel</button>
        <span class="hint">${unseen > 0
-            ? `Including the ${unseen} below the ones loaded.` : "The whole pile."}</span>`
+            ? `Includes ${unseen} not yet loaded.` : "The whole pile."}</span>`
     : `<button type="button" class="btn small ghost" data-sweep="arm">Decline the rest</button>
-       <span class="hint">${plural(state.total, "job")} you have not marked.</span>`;
+       <span class="hint">${plural(state.total, "job")} unmarked.</span>`;
 }
 
 document.getElementById("sweep-row").addEventListener("click", async (e) => {
